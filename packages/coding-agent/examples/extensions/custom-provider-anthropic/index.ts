@@ -30,11 +30,12 @@ import {
 	type Context,
 	calculateCost,
 	createAssistantMessageEventStream,
-	type ImageContent,
+	type DocumentContent,
 	type Message,
 	type Model,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
+	type PromptContentBlock,
 	type SimpleStreamOptions,
 	type StopReason,
 	type TextContent,
@@ -185,15 +186,23 @@ function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
 }
 
+function formatDocumentSummary(block: DocumentContent): string {
+	const name = block.fileName ?? "document";
+	return `[document attached: ${name} (${block.mimeType})]`;
+}
+
 function convertContentBlocks(
-	content: (TextContent | ImageContent)[],
+	content: PromptContentBlock[],
 ): string | Array<{ type: "text"; text: string } | { type: "image"; source: any }> {
-	const hasImages = content.some((c) => c.type === "image");
+	const normalizedContent = content.map((block) =>
+		block.type === "document" ? ({ type: "text", text: formatDocumentSummary(block) } as TextContent) : block,
+	);
+	const hasImages = normalizedContent.some((c) => c.type === "image");
 	if (!hasImages) {
-		return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
+		return sanitizeSurrogates(normalizedContent.map((c) => (c as TextContent).text).join("\n"));
 	}
 
-	const blocks = content.map((block) => {
+	const blocks = normalizedContent.map((block) => {
 		if (block.type === "text") {
 			return { type: "text" as const, text: sanitizeSurrogates(block.text) };
 		}

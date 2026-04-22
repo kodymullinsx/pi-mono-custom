@@ -16,6 +16,7 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
+	DocumentContent,
 	ImageContent,
 	Message,
 	Model,
@@ -71,6 +72,17 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 
 function isImageContentBlock(block: { type: string }): block is ImageContent {
 	return block.type === "image";
+}
+
+function isDocumentContentBlock(block: { type: string }): block is DocumentContent {
+	return block.type === "document";
+}
+
+function throwUnsupportedDocumentSerialization(block: DocumentContent, location: string): never {
+	const name = block.fileName ?? "document";
+	throw new Error(
+		`This OpenAI-compatible ${location} cannot accept first-class documents yet (${name}, ${block.mimeType}). Convert the file to PDF pages/images or extracted text before sending it to this model.`,
+	);
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
@@ -711,7 +723,8 @@ export function convertMessages(
 							type: "text",
 							text: sanitizeSurrogates(item.text),
 						} satisfies ChatCompletionContentPartText;
-					} else {
+					}
+					if (item.type === "image") {
 						return {
 							type: "image_url",
 							image_url: {
@@ -719,6 +732,7 @@ export function convertMessages(
 							},
 						} satisfies ChatCompletionContentPartImage;
 					}
+					return throwUnsupportedDocumentSerialization(item, "user messages");
 				});
 				if (content.length === 0) continue;
 				params.push({
@@ -830,6 +844,10 @@ export function convertMessages(
 					.map((block) => block.text)
 					.join("\n");
 				const hasImages = toolMsg.content.some((c) => c.type === "image");
+				const documentBlock = toolMsg.content.find(isDocumentContentBlock);
+				if (documentBlock) {
+					throwUnsupportedDocumentSerialization(documentBlock, "tool results");
+				}
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;

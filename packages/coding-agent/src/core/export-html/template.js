@@ -885,6 +885,15 @@
             '</div>';
         };
 
+        const renderResultDocuments = () => {
+          if (!result) return '';
+          const documents = result.content.filter(c => c.type === 'document');
+          if (documents.length === 0) return '';
+          return '<div class="tool-documents">' +
+            documents.map(doc => `<div class="tool-document">[document attached: ${escapeHtml(doc.fileName || doc.mimeType || 'document')}]</div>`).join('') +
+            '</div>';
+        };
+
         let html = `<div class="tool-execution ${statusClass}">`;
         const args = call.arguments || {};
         const name = call.name;
@@ -917,6 +926,7 @@
             html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
             if (result) {
               html += renderResultImages();
+              html += renderResultDocuments();
               const output = getResultText();
               const lang = filePath ? getLanguageFromPath(filePath) : null;
               if (output) html += formatExpandableOutput(output, 10, lang);
@@ -1149,6 +1159,15 @@
                 html += '<div class="message-images">';
                 for (const img of images) {
                   html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${img.data}" class="message-image" />`;
+                }
+                html += '</div>';
+              }
+
+              const documents = content.filter(c => c.type === 'document');
+              if (documents.length > 0) {
+                html += '<div class="message-documents">';
+                for (const doc of documents) {
+                  html += `<div class="message-document">[document attached: ${escapeHtml(doc.fileName || doc.mimeType || 'document')}]</div>`;
                 }
                 html += '</div>';
               }

@@ -64,6 +64,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 		maxOut: formatTokenCount(m.maxTokens),
 		thinking: m.reasoning ? "yes" : "no",
 		images: m.input.includes("image") ? "yes" : "no",
+		documents: m.input.includes("document") ? "yes" : "no",
 	}));
 
 	const headers = {
@@ -73,6 +74,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 		maxOut: "max-out",
 		thinking: "thinking",
 		images: "images",
+		documents: "docs",
 	};
 
 	const widths = {
@@ -82,6 +84,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 		maxOut: Math.max(headers.maxOut.length, ...rows.map((r) => r.maxOut.length)),
 		thinking: Math.max(headers.thinking.length, ...rows.map((r) => r.thinking.length)),
 		images: Math.max(headers.images.length, ...rows.map((r) => r.images.length)),
+		documents: Math.max(headers.documents.length, ...rows.map((r) => r.documents.length)),
 	};
 
 	// Print header
@@ -92,6 +95,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 		headers.maxOut.padEnd(widths.maxOut),
 		headers.thinking.padEnd(widths.thinking),
 		headers.images.padEnd(widths.images),
+		headers.documents.padEnd(widths.documents),
 	].join("  ");
 	console.log(headerLine);
 
@@ -104,6 +108,7 @@ export async function listModels(modelRegistry: ModelRegistry, searchPattern?: s
 			row.maxOut.padEnd(widths.maxOut),
 			row.thinking.padEnd(widths.thinking),
 			row.images.padEnd(widths.images),
+			row.documents.padEnd(widths.documents),
 		].join("  ");
 		console.log(line);
 	}

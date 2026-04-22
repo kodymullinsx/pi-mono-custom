@@ -17,6 +17,7 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
+	DocumentContent,
 	ImageContent,
 	Model,
 	StopReason,
@@ -36,6 +37,18 @@ import { transformMessages } from "./transform-messages.js";
 // =============================================================================
 // Utilities
 // =============================================================================
+
+function formatDocumentSummary(block: DocumentContent): string {
+	const name = block.fileName ?? "document";
+	return `[document attached: ${name} (${block.mimeType})]`;
+}
+
+function throwUnsupportedDocumentSerialization(block: DocumentContent, location: string): never {
+	const name = block.fileName ?? "document";
+	throw new Error(
+		`This OpenAI-compatible ${location} cannot accept first-class documents yet (${name}, ${block.mimeType}). Convert the file to PDF pages/images or extracted text before sending it to this model.`,
+	);
+}
 
 function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
 	const payload: TextSignatureV1 = { v: 1, id };
@@ -147,6 +160,9 @@ export function convertResponsesMessages<TApi extends Api>(
 							text: sanitizeSurrogates(item.text),
 						} satisfies ResponseInputText;
 					}
+					if (item.type === "document") {
+						return throwUnsupportedDocumentSerialization(item, "user messages");
+					}
 					return {
 						type: "input_image",
 						detail: "auto",
@@ -216,14 +232,26 @@ export function convertResponsesMessages<TApi extends Api>(
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
 			const textResult = msg.content
-				.filter((c): c is TextContent => c.type === "text")
-				.map((c) => c.text)
+				.map((c) => {
+					if (c.type === "text") {
+						return c.text;
+					}
+					if (c.type === "document") {
+						return formatDocumentSummary(c);
+					}
+					return null;
+				})
+				.filter((c): c is string => c !== null)
 				.join("\n");
+			const documentBlock = msg.content.find((c): c is DocumentContent => c.type === "document");
 			const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
 			const hasText = textResult.length > 0;
 			const [callId] = msg.toolCallId.split("|");
 
 			let output: string | ResponseFunctionCallOutputItemList;
+			if (documentBlock) {
+				throwUnsupportedDocumentSerialization(documentBlock, "tool results");
+			}
 			if (hasImages && model.input.includes("image")) {
 				const contentParts: ResponseFunctionCallOutputItemList = [];
 

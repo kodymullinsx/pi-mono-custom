@@ -777,7 +777,7 @@ function createRunner(sandboxConfig: SandboxConfig, channelId: string, channelDi
 			};
 			await writeFile(join(channelDir, "last_prompt.jsonl"), JSON.stringify(debugContext, null, 2));
 
-			await session.prompt(userMessage, imageAttachments.length > 0 ? { images: imageAttachments } : undefined);
+			await session.prompt(userMessage, imageAttachments.length > 0 ? { attachments: imageAttachments } : undefined);
 
 			// Wait for queued messages
 			await queueChain;

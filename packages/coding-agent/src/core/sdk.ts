@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, type ThinkingLevel } from "@mariozechner/pi-agent-core";
-import { type Message, type Model, streamSimple } from "@mariozechner/pi-ai";
+import { type Message, type Model, type PromptContentBlock, streamSimple } from "@mariozechner/pi-ai";
 import { getAgentDir, getDocsPath } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -133,6 +133,52 @@ function getOpenRouterAttributionHeaders(
 	};
 }
 
+function replaceUnsupportedAttachments(
+	content: PromptContentBlock[],
+	options: {
+		blockImages: boolean;
+		supportsImages: boolean;
+		supportsDocuments: boolean;
+	},
+): PromptContentBlock[] {
+	const result: PromptContentBlock[] = [];
+
+	const pushPlaceholder = (text: string) => {
+		const previous = result[result.length - 1];
+		if (previous?.type === "text" && previous.text === text) {
+			return;
+		}
+		result.push({ type: "text", text });
+	};
+
+	for (const block of content) {
+		if (block.type === "image") {
+			if (options.blockImages) {
+				pushPlaceholder("Image reading is disabled.");
+			} else if (!options.supportsImages) {
+				pushPlaceholder("Image input is not supported by the current model.");
+			} else {
+				result.push(block);
+			}
+			continue;
+		}
+
+		if (block.type === "document") {
+			const supportsInlineDocument = options.supportsDocuments && block.mimeType === "application/pdf";
+			if (!supportsInlineDocument) {
+				pushPlaceholder("Document input is not supported by the current model.");
+			} else {
+				result.push(block);
+			}
+			continue;
+		}
+
+		result.push(block);
+	}
+
+	return result;
+}
+
 /**
  * Create an AgentSession with the specified options.
  *
@@ -249,36 +295,25 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	let agent: Agent;
 
-	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
+	// Create convertToLlm wrapper that strips unsupported media before provider serialization.
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
 		const converted = convertToLlm(messages);
-		// Check setting dynamically so mid-session changes take effect
-		if (!settingsManager.getBlockImages()) {
-			return converted;
-		}
-		// Filter out ImageContent from all messages, replacing with text placeholder
+		const currentModel = agent?.state.model ?? model;
+		const blockImages = settingsManager.getBlockImages();
+		const supportsImages = currentModel?.input.includes("image") ?? false;
+		const supportsDocuments = currentModel?.input.includes("document") ?? false;
+
 		return converted.map((msg) => {
 			if (msg.role === "user" || msg.role === "toolResult") {
 				const content = msg.content;
 				if (Array.isArray(content)) {
-					const hasImages = content.some((c) => c.type === "image");
-					if (hasImages) {
-						const filteredContent = content
-							.map((c) =>
-								c.type === "image" ? { type: "text" as const, text: "Image reading is disabled." } : c,
-							)
-							.filter(
-								(c, i, arr) =>
-									// Dedupe consecutive "Image reading is disabled." texts
-									!(
-										c.type === "text" &&
-										c.text === "Image reading is disabled." &&
-										i > 0 &&
-										arr[i - 1].type === "text" &&
-										(arr[i - 1] as { type: "text"; text: string }).text === "Image reading is disabled."
-									),
-							);
-						return { ...msg, content: filteredContent };
+					const normalizedContent = replaceUnsupportedAttachments(content, {
+						blockImages,
+						supportsImages,
+						supportsDocuments,
+					});
+					if (normalizedContent !== content) {
+						return { ...msg, content: normalizedContent };
 					}
 				}
 			}

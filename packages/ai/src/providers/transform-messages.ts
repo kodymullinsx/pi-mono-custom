@@ -1,23 +1,44 @@
 import type {
 	Api,
 	AssistantMessage,
+	DocumentContent,
 	ImageContent,
 	Message,
 	Model,
-	TextContent,
+	PromptContentBlock,
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
+const NON_DOCUMENT_USER_PLACEHOLDER = "(document omitted: model does not support documents)";
+const NON_DOCUMENT_TOOL_PLACEHOLDER = "(tool document omitted: model does not support documents)";
 
-function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], placeholder: string): TextContent[] {
-	const result: TextContent[] = [];
+function supportsDocumentBlock<TApi extends Api>(model: Model<TApi>, block: DocumentContent): boolean {
+	if (!model.input.includes("document")) {
+		return false;
+	}
+	return block.mimeType === "application/pdf";
+}
+
+function replaceUnsupportedMediaWithPlaceholder(
+	content: PromptContentBlock[],
+	shouldKeepBlock: (block: ImageContent | DocumentContent) => boolean,
+	placeholderForBlock: (block: ImageContent | DocumentContent) => string,
+): PromptContentBlock[] {
+	const result: PromptContentBlock[] = [];
 	let previousWasPlaceholder = false;
 
 	for (const block of content) {
-		if (block.type === "image") {
+		if (block.type === "image" || block.type === "document") {
+			if (shouldKeepBlock(block)) {
+				result.push(block);
+				previousWasPlaceholder = false;
+				continue;
+			}
+
+			const placeholder = placeholderForBlock(block);
 			if (!previousWasPlaceholder) {
 				result.push({ type: "text", text: placeholder });
 			}
@@ -26,29 +47,48 @@ function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], p
 		}
 
 		result.push(block);
-		previousWasPlaceholder = block.text === placeholder;
+		previousWasPlaceholder = false;
 	}
 
 	return result;
 }
 
-function downgradeUnsupportedImages<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
-	if (model.input.includes("image")) {
-		return messages;
+function downgradeUnsupportedAttachments<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
+	const supportsImages = model.input.includes("image");
+	const supportsDocuments = model.input.includes("document");
+
+	if (supportsImages && supportsDocuments) {
+		const hasUnsupportedDocuments = messages.some(
+			(msg) =>
+				(msg.role === "user" || msg.role === "toolResult") &&
+				Array.isArray(msg.content) &&
+				msg.content.some((block) => block.type === "document" && !supportsDocumentBlock(model, block)),
+		);
+		if (!hasUnsupportedDocuments) {
+			return messages;
+		}
 	}
 
 	return messages.map((msg) => {
 		if (msg.role === "user" && Array.isArray(msg.content)) {
 			return {
 				...msg,
-				content: replaceImagesWithPlaceholder(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER),
+				content: replaceUnsupportedMediaWithPlaceholder(
+					msg.content,
+					(block) => (block.type === "image" ? supportsImages : supportsDocumentBlock(model, block)),
+					(block) => (block.type === "image" ? NON_VISION_USER_IMAGE_PLACEHOLDER : NON_DOCUMENT_USER_PLACEHOLDER),
+				),
 			};
 		}
 
 		if (msg.role === "toolResult") {
 			return {
 				...msg,
-				content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),
+				content: replaceUnsupportedMediaWithPlaceholder(
+					msg.content,
+					(block) => (block.type === "image" ? supportsImages : supportsDocumentBlock(model, block)),
+					(block) => (block.type === "image" ? NON_VISION_TOOL_IMAGE_PLACEHOLDER : NON_DOCUMENT_TOOL_PLACEHOLDER),
+				),
 			};
 		}
 
@@ -68,7 +108,7 @@ export function transformMessages<TApi extends Api>(
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
-	const imageAwareMessages = downgradeUnsupportedImages(messages, model);
+	const imageAwareMessages = downgradeUnsupportedAttachments(messages, model);
 
 	// First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
 	const transformed = imageAwareMessages.map((msg) => {

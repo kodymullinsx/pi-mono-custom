@@ -131,7 +131,7 @@ describe("AgentSession prompt characterization", () => {
 		]);
 
 		await harness.session.prompt("describe", {
-			images: [
+			attachments: [
 				{
 					type: "image",
 					mimeType: "image/png",

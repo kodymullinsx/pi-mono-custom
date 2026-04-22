@@ -544,6 +544,99 @@ describe("agentLoop with AgentMessage", () => {
 		expect(turnToolResultIds).toEqual(["tool-1", "tool-2"]);
 	});
 
+	it("should append supplemental tool messages after the metadata tool result", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: `metadata:${params.value}` }],
+					details: { value: params.value },
+					newMessages: [createUserMessage(`supplemental:${params.value}`)],
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		let callIndex = 0;
+		const stream = agentLoop([createUserMessage("hello")], context, config, undefined, () => {
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (callIndex === 0) {
+					mockStream.push({
+						type: "done",
+						reason: "toolUse",
+						message: createAssistantMessage(
+							[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+							"toolUse",
+						),
+					});
+				} else {
+					mockStream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage([{ type: "text", text: "done" }]),
+					});
+				}
+				callIndex++;
+			});
+			return mockStream;
+		});
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const messages = await stream.result();
+		expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user", "assistant"]);
+		expect(messages[2]).toMatchObject({ role: "toolResult", content: [{ type: "text", text: "metadata:hello" }] });
+		expect(messages[3]).toMatchObject({ role: "user", content: "supplemental:hello" });
+
+		const messageEndRoles = events.flatMap((event) => (event.type === "message_end" ? [event.message.role] : []));
+		expect(messageEndRoles).toContain("toolResult");
+		const toolResultIndex = messageEndRoles.indexOf("toolResult");
+		const supplementalIndex = messageEndRoles.indexOf("user", toolResultIndex + 1);
+		expect(toolResultIndex).toBeGreaterThan(-1);
+		expect(supplementalIndex).toBeGreaterThan(toolResultIndex);
+	});
+
+	it("should reject the stream result when the loop fails before completion", async () => {
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [],
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: () => {
+				throw new Error("convert failed");
+			},
+		};
+
+		const stream = agentLoop([createUserMessage("hello")], context, config);
+
+		for await (const _event of stream) {
+			// consume and ensure the iterator terminates cleanly
+		}
+
+		await expect(stream.result()).rejects.toThrow("convert failed");
+	});
+
 	it("should inject queued messages after all tool calls complete", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];

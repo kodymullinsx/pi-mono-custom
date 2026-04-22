@@ -126,7 +126,9 @@ const ModelDefinitionSchema = Type.Object({
 	api: Type.Optional(Type.String({ minLength: 1 })),
 	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
 	reasoning: Type.Optional(Type.Boolean()),
-	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
+	input: Type.Optional(
+		Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image"), Type.Literal("document")])),
+	),
 	cost: Type.Optional(
 		Type.Object({
 			input: Type.Number(),
@@ -145,7 +147,9 @@ const ModelDefinitionSchema = Type.Object({
 const ModelOverrideSchema = Type.Object({
 	name: Type.Optional(Type.String({ minLength: 1 })),
 	reasoning: Type.Optional(Type.Boolean()),
-	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
+	input: Type.Optional(
+		Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image"), Type.Literal("document")])),
+	),
 	cost: Type.Optional(
 		Type.Object({
 			input: Type.Optional(Type.Number()),
@@ -192,6 +196,30 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 	}
 	const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
 	return path || "root";
+}
+
+function supportsBuiltInPdfDocuments(model: Model<Api>): boolean {
+	if (model.provider === "anthropic") {
+		return true;
+	}
+
+	if (model.provider !== "amazon-bedrock") {
+		return false;
+	}
+
+	const id = model.id.toLowerCase();
+	return id.includes("anthropic.claude") || id.includes("anthropic/claude");
+}
+
+function augmentBuiltInModelCapabilities(model: Model<Api>): Model<Api> {
+	if (!supportsBuiltInPdfDocuments(model) || model.input.includes("document")) {
+		return model;
+	}
+
+	return {
+		...model,
+		input: [...model.input, "document"] as ("text" | "image" | "document")[],
+	};
 }
 
 /** Provider override config (baseUrl, compat) without request auth/headers */
@@ -272,7 +300,7 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 	// Simple field overrides
 	if (override.name !== undefined) result.name = override.name;
 	if (override.reasoning !== undefined) result.reasoning = override.reasoning;
-	if (override.input !== undefined) result.input = override.input as ("text" | "image")[];
+	if (override.input !== undefined) result.input = override.input as ("text" | "image" | "document")[];
 	if (override.contextWindow !== undefined) result.contextWindow = override.contextWindow;
 	if (override.maxTokens !== undefined) result.maxTokens = override.maxTokens;
 
@@ -385,7 +413,7 @@ export class ModelRegistry {
 			const perModelOverrides = modelOverrides.get(provider);
 
 			return models.map((m) => {
-				let model = m;
+				let model = augmentBuiltInModelCapabilities(m);
 
 				// Apply provider-level baseUrl/headers/compat override
 				if (providerOverride) {
@@ -565,7 +593,7 @@ export class ModelRegistry {
 					provider: providerName,
 					baseUrl,
 					reasoning: modelDef.reasoning ?? false,
-					input: (modelDef.input ?? ["text"]) as ("text" | "image")[],
+					input: (modelDef.input ?? ["text"]) as ("text" | "image" | "document")[],
 					cost: modelDef.cost ?? defaultCost,
 					contextWindow: modelDef.contextWindow ?? 128000,
 					maxTokens: modelDef.maxTokens ?? 16384,
@@ -801,7 +829,7 @@ export class ModelRegistry {
 					provider: providerName,
 					baseUrl: config.baseUrl!,
 					reasoning: modelDef.reasoning,
-					input: modelDef.input as ("text" | "image")[],
+					input: modelDef.input as ("text" | "image" | "document")[],
 					cost: modelDef.cost,
 					contextWindow: modelDef.contextWindow,
 					maxTokens: modelDef.maxTokens,
@@ -848,7 +876,7 @@ export interface ProviderConfigInput {
 		api?: Api;
 		baseUrl?: string;
 		reasoning: boolean;
-		input: ("text" | "image")[];
+		input: ("text" | "image" | "document")[];
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow: number;
 		maxTokens: number;

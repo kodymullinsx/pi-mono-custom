@@ -1,13 +1,23 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Api, ImageContent, Model, TextContent } from "@mariozechner/pi-ai";
+import type { Api, DocumentContent, ImageContent, Model, PromptContentBlock } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import { constants } from "fs";
-import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
+import { access as fsAccess, readFile as fsReadFile, stat as fsStat } from "fs/promises";
+import { basename, extname } from "path";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
+import {
+	extractPDFPages,
+	getPDFPageCount,
+	PDF_AT_MENTION_INLINE_THRESHOLD,
+	PDF_MAX_PAGES_PER_READ,
+	parsePDFPageRange,
+	readPDF,
+} from "../../utils/pdf.js";
+import { getPDFCacheEntry } from "../../utils/pdf-cache.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
@@ -18,12 +28,23 @@ const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
 	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
 	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+	pages: Type.Optional(
+		Type.String({
+			description: `Page range for PDF files (for example "1-5", "3", or "10-20"). Maximum ${PDF_MAX_PAGES_PER_READ} pages per request.`,
+		}),
+	),
 });
 
 export type ReadToolInput = Static<typeof readSchema>;
 
 export interface ReadToolDetails {
 	truncation?: TruncationResult;
+	pdf?: {
+		pageCount?: number;
+		renderedPages?: number;
+		firstPage?: number;
+		lastPage?: number;
+	};
 }
 
 /**
@@ -85,9 +106,16 @@ function getNonVisionImageNote(model: Model<Api> | undefined): string | undefine
 	return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
+function getRequestedPageCount(range: { firstPage: number; lastPage: number }): number {
+	if (!Number.isFinite(range.lastPage)) {
+		return PDF_MAX_PAGES_PER_READ + 1;
+	}
+	return range.lastPage - range.firstPage + 1;
+}
+
 function formatReadResult(
 	args: { path?: string; file_path?: string; offset?: number; limit?: number } | undefined,
-	result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
+	result: { content: PromptContentBlock[]; details?: ReadToolDetails },
 	options: ToolRenderResultOptions,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 	showImages: boolean,
@@ -127,19 +155,19 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+		description: `Read the contents of a file. Supports text files, images (jpg, png, gif, webp), and PDFs. Images and rendered PDF pages are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large text files and pages for large PDFs.`,
 		promptSnippet: "Read file contents",
 		promptGuidelines: ["Use read to examine files instead of cat or sed."],
 		parameters: readSchema,
 		async execute(
 			_toolCallId,
-			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
+			{ path, offset, limit, pages }: { path: string; offset?: number; limit?: number; pages?: string },
 			signal?: AbortSignal,
 			_onUpdate?,
 			ctx?,
 		) {
 			const absolutePath = resolveReadPath(path, cwd);
-			return new Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }>(
+			return new Promise<{ content: PromptContentBlock[]; details: ReadToolDetails | undefined }>(
 				(resolve, reject) => {
 					if (signal?.aborted) {
 						reject(new Error("Operation aborted"));
@@ -158,10 +186,151 @@ export function createReadToolDefinition(
 							await ops.access(absolutePath);
 							if (aborted) return;
 							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
-							let content: (TextContent | ImageContent)[];
+							let content: PromptContentBlock[];
 							let details: ReadToolDetails | undefined;
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
-							if (mimeType) {
+							const isPdf = extname(absolutePath).toLowerCase() === ".pdf";
+							if (isPdf) {
+								let pageRange: { firstPage: number; lastPage: number } | undefined;
+								if (pages !== undefined) {
+									pageRange = parsePDFPageRange(pages) ?? undefined;
+									if (!pageRange) {
+										throw new Error(
+											`Invalid pages parameter: "${pages}". Use formats like "1-5", "3", or "10-20". Pages are 1-indexed.`,
+										);
+									}
+									if (getRequestedPageCount(pageRange) > PDF_MAX_PAGES_PER_READ) {
+										throw new Error(
+											`Page range "${pages}" exceeds maximum of ${PDF_MAX_PAGES_PER_READ} pages per request.`,
+										);
+									}
+								}
+
+								const pageCount = await getPDFPageCount(absolutePath, signal);
+								const supportsDocuments = ctx?.model?.input.includes("document") ?? false;
+								if (!pageRange && !supportsDocuments && pageCount === null) {
+									throw new Error(
+										"Could not determine the PDF page count. Install poppler (`brew install poppler`) to enable full-PDF inspection or provide a pages range.",
+									);
+								}
+								if (
+									!pageRange &&
+									!supportsDocuments &&
+									pageCount !== null &&
+									pageCount > PDF_AT_MENTION_INLINE_THRESHOLD
+								) {
+									throw new Error(
+										`This PDF has ${pageCount} pages, which is too many to read at once. Use pages="1-5" style ranges. Maximum ${PDF_MAX_PAGES_PER_READ} pages per request.`,
+									);
+								}
+								if (pageRange && pageCount !== null && pageRange.firstPage > pageCount) {
+									throw new Error(
+										`Page range "${pages}" starts beyond the end of the PDF (${pageCount} pages total).`,
+									);
+								}
+
+								const effectiveRange = pageRange
+									? {
+											firstPage: pageRange.firstPage,
+											lastPage:
+												pageCount !== null && Number.isFinite(pageRange.lastPage)
+													? Math.min(pageRange.lastPage, pageCount)
+													: pageRange.lastPage,
+										}
+									: undefined;
+
+								if (!effectiveRange && supportsDocuments) {
+									const pdfResult = await readPDF(absolutePath);
+									if (!pdfResult.success) {
+										throw new Error(pdfResult.error.message);
+									}
+									const pdfNote = `Read PDF file [application/pdf]${pageCount ? ` (${pageCount} page(s))` : ""}`;
+									content = [
+										{ type: "text", text: pdfNote },
+										{
+											type: "document",
+											mimeType: "application/pdf",
+											data: pdfResult.data.file.base64,
+											fileName: basename(absolutePath),
+										} satisfies DocumentContent,
+									];
+									details = { pdf: { pageCount: pageCount ?? undefined } };
+								} else {
+									const fileStats = await fsStat(absolutePath);
+									const cacheEntry = await getPDFCacheEntry(absolutePath, fileStats.mtimeMs, effectiveRange);
+									let imagePaths = cacheEntry.imagePaths;
+									if (imagePaths.length === 0) {
+										const extractResult = await extractPDFPages(absolutePath, {
+											firstPage: effectiveRange?.firstPage,
+											lastPage:
+												effectiveRange?.lastPage && Number.isFinite(effectiveRange.lastPage)
+													? effectiveRange.lastPage
+													: undefined,
+											outputDir: cacheEntry.outputDir,
+											signal,
+										});
+										if (!extractResult.success) {
+											throw new Error(extractResult.error.message);
+										}
+										imagePaths = extractResult.data.file.imagePaths;
+									}
+
+									const imageBlocks = (
+										await Promise.all(
+											imagePaths.map(async (imagePath) => {
+												const buffer = await fsReadFile(imagePath);
+												const base64 = buffer.toString("base64");
+												if (!autoResizeImages) {
+													return {
+														type: "image" as const,
+														mimeType: "image/jpeg",
+														data: base64,
+													};
+												}
+												const resized = await resizeImage({
+													type: "image",
+													data: base64,
+													mimeType: "image/jpeg",
+												});
+												if (!resized) {
+													return null;
+												}
+												return {
+													type: "image" as const,
+													mimeType: resized.mimeType,
+													data: resized.data,
+												};
+											}),
+										)
+									).filter((block): block is ImageContent => block !== null);
+
+									const renderedPageCount = imageBlocks.length;
+									const firstPage = effectiveRange?.firstPage ?? 1;
+									const lastPage =
+										effectiveRange?.lastPage && Number.isFinite(effectiveRange.lastPage)
+											? effectiveRange.lastPage
+											: firstPage + renderedPageCount - 1;
+									let pdfNote = effectiveRange
+										? `Read PDF pages ${firstPage}-${lastPage}`
+										: `Read PDF file [application/pdf]${pageCount ? ` (${pageCount} page(s))` : ""}`;
+									if (renderedPageCount === 0) {
+										pdfNote +=
+											"\n[PDF pages omitted: could not be resized below the inline image size limit.]";
+									}
+									if (nonVisionImageNote) {
+										pdfNote += `\n${nonVisionImageNote}`;
+									}
+									content = [{ type: "text", text: pdfNote }, ...imageBlocks];
+									details = {
+										pdf: {
+											pageCount: pageCount ?? undefined,
+											renderedPages: renderedPageCount,
+											firstPage,
+											lastPage,
+										},
+									};
+								}
+							} else if (mimeType) {
 								// Read image as binary.
 								const buffer = await ops.readFile(absolutePath);
 								const base64 = buffer.toString("base64");

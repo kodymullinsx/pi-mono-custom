@@ -88,6 +88,22 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 /** Maximum characters for a tool result in serialized summaries. */
 const TOOL_RESULT_MAX_CHARS = 2000;
 
+function summarizePromptContent(content: Array<{ type: string; text?: string; fileName?: string }>): string {
+	const parts: string[] = [];
+
+	for (const block of content) {
+		if (block.type === "text" && block.text) {
+			parts.push(block.text);
+		} else if (block.type === "image") {
+			parts.push("[image]");
+		} else if (block.type === "document") {
+			parts.push(block.fileName ? `[document: ${block.fileName}]` : "[document]");
+		}
+	}
+
+	return parts.join("\n");
+}
+
 /**
  * Truncate text to a maximum character length for summarization.
  * Keeps the beginning and appends a truncation marker.
@@ -111,13 +127,7 @@ export function serializeConversation(messages: Message[]): string {
 
 	for (const msg of messages) {
 		if (msg.role === "user") {
-			const content =
-				typeof msg.content === "string"
-					? msg.content
-					: msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map((c) => c.text)
-							.join("");
+			const content = typeof msg.content === "string" ? msg.content : summarizePromptContent(msg.content);
 			if (content) parts.push(`[User]: ${content}`);
 		} else if (msg.role === "assistant") {
 			const textParts: string[] = [];
@@ -148,10 +158,7 @@ export function serializeConversation(messages: Message[]): string {
 				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
-			const content = msg.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("");
+			const content = summarizePromptContent(msg.content);
 			if (content) {
 				parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
 			}

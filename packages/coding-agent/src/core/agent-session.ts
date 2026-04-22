@@ -14,6 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { stat as fsStat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type {
 	Agent,
@@ -23,7 +24,14 @@ import type {
 	AgentTool,
 	ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/pi-ai";
+import type {
+	AssistantMessage,
+	AttachmentContent,
+	Message,
+	Model,
+	PromptContentBlock,
+	TextContent,
+} from "@mariozechner/pi-ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
@@ -81,6 +89,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
+import { resolveReadPath } from "./tools/path-utils.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 
 // ============================================================================
@@ -178,8 +187,8 @@ export interface ExtensionBindings {
 export interface PromptOptions {
 	/** Whether to expand file-based prompt templates (default: true) */
 	expandPromptTemplates?: boolean;
-	/** Image attachments */
-	images?: ImageContent[];
+	/** Non-text attachments included with the prompt */
+	attachments?: AttachmentContent[];
 	/** When streaming, how to queue the message: "steer" (interrupt) or "followUp" (wait). Required if streaming. */
 	streamingBehavior?: "steer" | "followUp";
 	/** Source of input for extension input event handlers. Defaults to "interactive". */
@@ -231,6 +240,22 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 /** Thinking levels including xhigh (for supported models) */
 const THINKING_LEVELS_WITH_XHIGH: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
+const FILE_UNCHANGED_TEXT = "File has not changed since the last read.";
+const TOOL_ATTACHMENT_CUSTOM_TYPE = "tool_attachment";
+
+type ReadFileStateEntry = {
+	mtimeMs: number;
+	offset?: number;
+	limit?: number;
+};
+
+type AttachmentRetryTarget = "document" | "image";
+type AttachmentRetrySource = "tool_attachment" | "user";
+type AttachmentRetryStripResult = {
+	source: AttachmentRetrySource;
+	strippedKinds: AttachmentRetryTarget[];
+};
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -267,6 +292,7 @@ export class AgentSession {
 	private _retryAttempt = 0;
 	private _retryPromise: Promise<void> | undefined = undefined;
 	private _retryResolve: (() => void) | undefined = undefined;
+	private _readFileState = new Map<string, ReadFileStateEntry>();
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
@@ -395,29 +421,178 @@ export class AgentSession {
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
 			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_result")) {
-				return undefined;
+			let nextContent = result.content;
+			let nextDetails = result.details;
+			let nextNewMessages = result.newMessages;
+			let nextIsError = isError;
+
+			if (runner.hasHandlers("tool_result")) {
+				const hookResult = await runner.emitToolResult({
+					type: "tool_result",
+					toolName: toolCall.name,
+					toolCallId: toolCall.id,
+					input: args as Record<string, unknown>,
+					content: nextContent,
+					details: nextDetails,
+					newMessages: nextNewMessages,
+					isError: nextIsError,
+				});
+
+				if (hookResult) {
+					nextContent = hookResult.content ?? nextContent;
+					nextDetails = hookResult.details ?? nextDetails;
+					nextNewMessages = hookResult.newMessages ?? nextNewMessages;
+					nextIsError = hookResult.isError ?? nextIsError;
+				}
 			}
 
-			const hookResult = await runner.emitToolResult({
-				type: "tool_result",
-				toolName: toolCall.name,
-				toolCallId: toolCall.id,
-				input: args as Record<string, unknown>,
-				content: result.content,
-				details: result.details,
-				isError,
-			});
+			return this._applyToolResultParity(
+				toolCall.name,
+				toolCall.id,
+				args,
+				nextContent,
+				nextDetails,
+				nextNewMessages,
+				nextIsError,
+			);
+		};
+	}
 
-			if (!hookResult) {
-				return undefined;
-			}
+	private async _applyToolResultParity(
+		toolName: string,
+		toolCallId: string,
+		args: unknown,
+		content: PromptContentBlock[],
+		details: unknown,
+		newMessages: AgentMessage[] | undefined,
+		isError: boolean,
+	): Promise<{
+		content: PromptContentBlock[];
+		details: unknown;
+		newMessages: AgentMessage[] | undefined;
+		isError: boolean;
+	}> {
+		if (toolName !== "read" || isError) {
+			return { content, details, newMessages, isError };
+		}
 
+		const { textBlocks, attachmentBlocks } = this._splitAttachmentBlocks(content);
+		if (attachmentBlocks.length > 0) {
 			return {
-				content: hookResult.content,
-				details: hookResult.details,
-				isError: hookResult.isError ?? isError,
+				content:
+					textBlocks.length > 0
+						? textBlocks
+						: [{ type: "text", text: "Read attachment prepared for model inspection." }],
+				details,
+				newMessages: [...(newMessages ?? []), this._buildToolAttachmentMessage(toolCallId, attachmentBlocks)],
+				isError,
 			};
+		}
+
+		const fileUnchangedContent = await this._applyReadFileState(args);
+		return {
+			content: fileUnchangedContent ?? content,
+			details,
+			newMessages,
+			isError,
+		};
+	}
+
+	private _splitAttachmentBlocks(content: PromptContentBlock[]): {
+		textBlocks: PromptContentBlock[];
+		attachmentBlocks: AttachmentContent[];
+	} {
+		const textBlocks: PromptContentBlock[] = [];
+		const attachmentBlocks: AttachmentContent[] = [];
+
+		for (const block of content) {
+			if (block.type === "image" || block.type === "document") {
+				attachmentBlocks.push(block);
+			} else {
+				textBlocks.push(block);
+			}
+		}
+
+		return { textBlocks, attachmentBlocks };
+	}
+
+	private _buildToolAttachmentMessage(toolCallId: string, content: AttachmentContent[]): CustomMessage {
+		return {
+			role: "custom",
+			customType: TOOL_ATTACHMENT_CUSTOM_TYPE,
+			content,
+			display: false,
+			details: {
+				toolName: "read",
+				toolCallId,
+			},
+			timestamp: Date.now(),
+		};
+	}
+
+	private async _applyReadFileState(args: unknown): Promise<PromptContentBlock[] | undefined> {
+		const request = this._extractReadRequest(args);
+		if (!request.absolutePath || request.pages) {
+			return undefined;
+		}
+
+		try {
+			const stats = await fsStat(request.absolutePath);
+			const nextState: ReadFileStateEntry = {
+				mtimeMs: stats.mtimeMs,
+				offset: request.offset,
+				limit: request.limit,
+			};
+			const previousState = this._readFileState.get(request.absolutePath);
+			this._readFileState.set(request.absolutePath, nextState);
+
+			if (
+				previousState &&
+				previousState.mtimeMs === nextState.mtimeMs &&
+				previousState.offset === nextState.offset &&
+				previousState.limit === nextState.limit
+			) {
+				return [{ type: "text", text: FILE_UNCHANGED_TEXT }];
+			}
+		} catch {
+			return undefined;
+		}
+
+		return undefined;
+	}
+
+	private _extractReadRequest(args: unknown): {
+		absolutePath?: string;
+		offset?: number;
+		limit?: number;
+		pages?: string;
+	} {
+		if (!args || typeof args !== "object") {
+			return {};
+		}
+
+		const input = args as {
+			path?: unknown;
+			file_path?: unknown;
+			offset?: unknown;
+			limit?: unknown;
+			pages?: unknown;
+		};
+		const rawPath =
+			typeof input.path === "string"
+				? input.path
+				: typeof input.file_path === "string"
+					? input.file_path
+					: undefined;
+		if (!rawPath) {
+			return {};
+		}
+
+		return {
+			absolutePath: resolveReadPath(rawPath, this._cwd),
+			offset: typeof input.offset === "number" ? input.offset : undefined,
+			limit: typeof input.limit === "number" ? input.limit : undefined,
+			pages: typeof input.pages === "string" ? input.pages : undefined,
 		};
 	}
 
@@ -472,7 +647,12 @@ export class AgentSession {
 		}
 
 		const lastAssistant = this._findLastAssistantInMessages(event.messages);
-		if (!lastAssistant || !this._isRetryableError(lastAssistant)) {
+		if (!lastAssistant) {
+			return;
+		}
+
+		const hasAttachmentRetry = this._getAttachmentRetryTargets(lastAssistant.errorMessage).size > 0;
+		if (!hasAttachmentRetry && !this._isRetryableError(lastAssistant)) {
 			return;
 		}
 
@@ -567,6 +747,9 @@ export class AgentSession {
 		if (event.type === "agent_end" && this._lastAssistantMessage) {
 			const msg = this._lastAssistantMessage;
 			this._lastAssistantMessage = undefined;
+
+			const didStripRetry = await this._handleAttachmentStripRetry(msg);
+			if (didStripRetry) return;
 
 			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this._isRetryableError(msg)) {
@@ -957,11 +1140,11 @@ export class AgentSession {
 
 			// Emit input event for extension interception (before skill/template expansion)
 			let currentText = text;
-			let currentImages = options?.images;
+			let currentAttachments = options?.attachments;
 			if (this._extensionRunner.hasHandlers("input")) {
 				const inputResult = await this._extensionRunner.emitInput(
 					currentText,
-					currentImages,
+					currentAttachments,
 					options?.source ?? "interactive",
 				);
 				if (inputResult.action === "handled") {
@@ -970,7 +1153,7 @@ export class AgentSession {
 				}
 				if (inputResult.action === "transform") {
 					currentText = inputResult.text;
-					currentImages = inputResult.images ?? currentImages;
+					currentAttachments = inputResult.attachments ?? currentAttachments;
 				}
 			}
 
@@ -989,9 +1172,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentAttachments);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentAttachments);
 				}
 				preflightResult?.(true);
 				return;
@@ -1034,9 +1217,9 @@ export class AgentSession {
 			messages = [];
 
 			// Add user message
-			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-			if (currentImages) {
-				userContent.push(...currentImages);
+			const userContent: PromptContentBlock[] = [{ type: "text", text: expandedText }];
+			if (currentAttachments) {
+				userContent.push(...currentAttachments);
 			}
 			messages.push({
 				role: "user",
@@ -1053,7 +1236,7 @@ export class AgentSession {
 			// Emit before_agent_start extension event
 			const result = await this._extensionRunner.emitBeforeAgentStart(
 				expandedText,
-				currentImages,
+				currentAttachments,
 				this._baseSystemPrompt,
 				this._baseSystemPromptOptions,
 			);
@@ -1156,10 +1339,10 @@ export class AgentSession {
 	 * Delivered after the current assistant turn finishes executing its tool calls,
 	 * before the next LLM call.
 	 * Expands skill commands and prompt templates. Errors on extension commands.
-	 * @param images Optional image attachments to include with the message
+	 * @param attachments Optional attachments to include with the message
 	 * @throws Error if text is an extension command
 	 */
-	async steer(text: string, images?: ImageContent[]): Promise<void> {
+	async steer(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		// Check for extension commands (cannot be queued)
 		if (text.startsWith("/")) {
 			this._throwIfExtensionCommand(text);
@@ -1169,17 +1352,17 @@ export class AgentSession {
 		let expandedText = this._expandSkillCommand(text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-		await this._queueSteer(expandedText, images);
+		await this._queueSteer(expandedText, attachments);
 	}
 
 	/**
 	 * Queue a follow-up message to be processed after the agent finishes.
 	 * Delivered only when agent has no more tool calls or steering messages.
 	 * Expands skill commands and prompt templates. Errors on extension commands.
-	 * @param images Optional image attachments to include with the message
+	 * @param attachments Optional attachments to include with the message
 	 * @throws Error if text is an extension command
 	 */
-	async followUp(text: string, images?: ImageContent[]): Promise<void> {
+	async followUp(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		// Check for extension commands (cannot be queued)
 		if (text.startsWith("/")) {
 			this._throwIfExtensionCommand(text);
@@ -1189,18 +1372,18 @@ export class AgentSession {
 		let expandedText = this._expandSkillCommand(text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-		await this._queueFollowUp(expandedText, images);
+		await this._queueFollowUp(expandedText, attachments);
 	}
 
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueSteer(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images) {
-			content.push(...images);
+		const content: PromptContentBlock[] = [{ type: "text", text }];
+		if (attachments) {
+			content.push(...attachments);
 		}
 		this.agent.steer({
 			role: "user",
@@ -1212,12 +1395,12 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images) {
-			content.push(...images);
+		const content: PromptContentBlock[] = [{ type: "text", text }];
+		if (attachments) {
+			content.push(...attachments);
 		}
 		this.agent.followUp({
 			role: "user",
@@ -1296,34 +1479,34 @@ export class AgentSession {
 	 * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
 	 */
 	async sendUserMessage(
-		content: string | (TextContent | ImageContent)[],
+		content: string | PromptContentBlock[],
 		options?: { deliverAs?: "steer" | "followUp" },
 	): Promise<void> {
-		// Normalize content to text string + optional images
+		// Normalize content to text string + optional attachments
 		let text: string;
-		let images: ImageContent[] | undefined;
+		let attachments: AttachmentContent[] | undefined;
 
 		if (typeof content === "string") {
 			text = content;
 		} else {
 			const textParts: string[] = [];
-			images = [];
+			attachments = [];
 			for (const part of content) {
 				if (part.type === "text") {
 					textParts.push(part.text);
 				} else {
-					images.push(part);
+					attachments.push(part);
 				}
 			}
 			text = textParts.join("\n");
-			if (images.length === 0) images = undefined;
+			if (attachments.length === 0) attachments = undefined;
 		}
 
 		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
 		await this.prompt(text, {
 			expandPromptTemplates: false,
 			streamingBehavior: options?.deliverAs,
-			images,
+			attachments,
 			source: "extension",
 		});
 	}
@@ -1686,6 +1869,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
+			this._readFileState.clear();
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -1958,6 +2142,7 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
+			this._readFileState.clear();
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2418,6 +2603,187 @@ export class AgentSession {
 		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|timed? out|timeout|terminated|retry delay/i.test(
 			err,
 		);
+	}
+
+	private _getAttachmentRetryTargets(errorMessage: string | undefined): Set<AttachmentRetryTarget> {
+		const targets = new Set<AttachmentRetryTarget>();
+		if (!errorMessage) return targets;
+
+		const isOversizeError =
+			/payload too large|request too large|input too large|too many bytes|media too large/i.test(errorMessage);
+		const isAttachmentRejection =
+			/unsupported|not support|does not support|cannot accept|can't accept|invalid|not allowed|rejected|failed to decode|unable to process|too large|exceeds|must be|only supports?/i.test(
+				errorMessage,
+			);
+		const mentionsDocument = /application\/pdf|pdf|document(?:\s+block)?|attachment|file upload/i.test(errorMessage);
+		const mentionsImage = /image|vision|png|jpe?g|webp|gif/i.test(errorMessage);
+
+		if (isOversizeError) {
+			if (mentionsDocument || !mentionsImage) {
+				targets.add("document");
+			}
+			if (mentionsImage || !mentionsDocument) {
+				targets.add("image");
+			}
+			return targets;
+		}
+
+		if (isAttachmentRejection && mentionsDocument) {
+			targets.add("document");
+		}
+		if (isAttachmentRejection && mentionsImage) {
+			targets.add("image");
+		}
+
+		return targets;
+	}
+
+	private _matchesAttachmentRetryTarget(block: PromptContentBlock, targets: Set<AttachmentRetryTarget>): boolean {
+		return (block.type === "document" && targets.has("document")) || (block.type === "image" && targets.has("image"));
+	}
+
+	private _describeAttachmentRetryKinds(kinds: AttachmentRetryTarget[]): string {
+		const uniqueKinds = Array.from(new Set(kinds));
+		if (uniqueKinds.length === 2) {
+			return "document and image attachments";
+		}
+		return uniqueKinds[0] === "document" ? "document attachments" : "image attachments";
+	}
+
+	private _buildAttachmentRetryPlaceholder(
+		strippedKinds: AttachmentRetryTarget[],
+		source: AttachmentRetrySource,
+	): PromptContentBlock[] {
+		const prefix = source === "tool_attachment" ? "Tool attachment" : "Attachment";
+		return [
+			{
+				type: "text",
+				text: `[${prefix} removed after the model rejected ${this._describeAttachmentRetryKinds(strippedKinds)}.]`,
+			},
+		];
+	}
+
+	private _stripAttachmentMessageAtIndex(
+		index: number,
+		targets: Set<AttachmentRetryTarget>,
+		source: AttachmentRetrySource,
+	): AttachmentRetryStripResult | undefined {
+		const message = this.agent.state.messages[index];
+		if (!message || (message.role !== "custom" && message.role !== "user") || typeof message.content === "string") {
+			return undefined;
+		}
+
+		const strippedKinds: AttachmentRetryTarget[] = Array.from(
+			new Set(
+				message.content
+					.filter((block): block is AttachmentContent => this._matchesAttachmentRetryTarget(block, targets))
+					.map((block) => block.type),
+			),
+		);
+		if (strippedKinds.length === 0) {
+			return undefined;
+		}
+
+		const nextContent = message.content.filter((block) => !this._matchesAttachmentRetryTarget(block, targets));
+		const nextMessages = [...this.agent.state.messages];
+		nextMessages[index] =
+			nextContent.length === 0
+				? {
+						...message,
+						content: this._buildAttachmentRetryPlaceholder(strippedKinds, source),
+					}
+				: {
+						...message,
+						content: nextContent,
+					};
+		this.agent.state.messages = nextMessages;
+		return { source, strippedKinds };
+	}
+
+	private _stripLatestAttachmentMessage(targets: Set<AttachmentRetryTarget>): AttachmentRetryStripResult | undefined {
+		if (targets.size === 0) {
+			return undefined;
+		}
+
+		const messages = this.agent.state.messages;
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index];
+			if (
+				message.role === "custom" &&
+				message.customType === TOOL_ATTACHMENT_CUSTOM_TYPE &&
+				typeof message.content !== "string"
+			) {
+				const result = this._stripAttachmentMessageAtIndex(index, targets, "tool_attachment");
+				if (result) {
+					return result;
+				}
+			}
+		}
+
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index];
+			if (message.role !== "user" || typeof message.content === "string") {
+				continue;
+			}
+			const result = this._stripAttachmentMessageAtIndex(index, targets, "user");
+			if (result) {
+				return result;
+			}
+		}
+
+		return undefined;
+	}
+
+	private async _handleAttachmentStripRetry(message: AssistantMessage): Promise<boolean> {
+		const settings = this.settingsManager.getRetrySettings();
+		if (!settings.enabled) {
+			this._resolveRetry();
+			return false;
+		}
+
+		const targets = this._getAttachmentRetryTargets(message.errorMessage);
+		if (targets.size === 0) {
+			return false;
+		}
+
+		const maxAttempts = settings.maxRetries;
+		this._retryAttempt++;
+		if (this._retryAttempt > maxAttempts) {
+			this._emit({
+				type: "auto_retry_end",
+				success: false,
+				attempt: this._retryAttempt - 1,
+				finalError: message.errorMessage,
+			});
+			this._retryAttempt = 0;
+			this._resolveRetry();
+			return false;
+		}
+
+		const stripResult = this._stripLatestAttachmentMessage(targets);
+		if (!stripResult) {
+			this._retryAttempt--;
+			return false;
+		}
+
+		const messages = this.agent.state.messages;
+		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+			this.agent.state.messages = messages.slice(0, -1);
+		}
+
+		this._emit({
+			type: "auto_retry_start",
+			attempt: this._retryAttempt,
+			maxAttempts,
+			delayMs: 0,
+			errorMessage: `${message.errorMessage || "Attachment rejected by model"} [auto-retry removed ${this._describeAttachmentRetryKinds(stripResult.strippedKinds)} from the latest ${stripResult.source === "tool_attachment" ? "tool attachment message" : "user attachment message"}]`,
+		});
+
+		setTimeout(() => {
+			this.agent.continue().catch(() => {});
+		}, 0);
+
+		return true;
 	}
 
 	/**

@@ -1,7 +1,8 @@
 import type {
 	AssistantMessage as AssistantMessageType,
+	DocumentContent,
 	ImageContent,
-	TextContent,
+	PromptContentBlock,
 	ToolCall,
 	ToolResultMessage as ToolResultMessageType,
 	UserMessage as UserMessageType,
@@ -17,7 +18,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 
 export type UserMessageWithAttachments = {
 	role: "user-with-attachments";
-	content: string | (TextContent | ImageContent)[];
+	content: string | PromptContentBlock[];
 	timestamp: number;
 	attachments?: Attachment[];
 };
@@ -302,10 +303,14 @@ import type { Message } from "@mariozechner/pi-ai";
 /**
  * Convert attachments to content blocks for LLM.
  * - Images become ImageContent blocks
- * - Documents with extractedText become TextContent blocks with filename header
+ * - Documents default to extracted-text blocks unless a caller opts into first-class documents
  */
-export function convertAttachments(attachments: Attachment[]): (TextContent | ImageContent)[] {
-	const content: (TextContent | ImageContent)[] = [];
+export function convertAttachments(
+	attachments: Attachment[],
+	options?: { allowFirstClassDocuments?: boolean },
+): PromptContentBlock[] {
+	const content: PromptContentBlock[] = [];
+	const allowFirstClassDocuments = options?.allowFirstClassDocuments ?? false;
 	for (const attachment of attachments) {
 		if (attachment.type === "image") {
 			content.push({
@@ -313,11 +318,29 @@ export function convertAttachments(attachments: Attachment[]): (TextContent | Im
 				data: attachment.content,
 				mimeType: attachment.mimeType,
 			} as ImageContent);
-		} else if (attachment.type === "document" && attachment.extractedText) {
+		} else if (attachment.type === "document") {
+			if (!allowFirstClassDocuments && attachment.extractedText) {
+				content.push({
+					type: "text",
+					text: attachment.extractedText,
+				});
+				continue;
+			}
+
+			if (!allowFirstClassDocuments) {
+				content.push({
+					type: "text",
+					text: `[document attached: ${attachment.fileName} (${attachment.mimeType})]`,
+				});
+				continue;
+			}
+
 			content.push({
-				type: "text",
-				text: `\n\n[Document: ${attachment.fileName}]\n${attachment.extractedText}`,
-			} as TextContent);
+				type: "document",
+				data: attachment.content,
+				mimeType: attachment.mimeType,
+				fileName: attachment.fileName,
+			} as DocumentContent);
 		}
 	}
 	return content;
@@ -357,7 +380,7 @@ export function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 		.map((m): Message | null => {
 			// Convert user-with-attachments to user message with content blocks
 			if (isUserMessageWithAttachments(m)) {
-				const textContent: (TextContent | ImageContent)[] =
+				const textContent: PromptContentBlock[] =
 					typeof m.content === "string" ? [{ type: "text", text: m.content }] : [...m.content];
 
 				if (m.attachments) {

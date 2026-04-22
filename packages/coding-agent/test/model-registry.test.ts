@@ -88,6 +88,39 @@ describe("ModelRegistry", () => {
 		messages: [],
 	};
 
+	test("adds document input to built-in Anthropic models", () => {
+		const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+		const model = registry.find("anthropic", "claude-sonnet-4-5");
+		expect(model).toBeDefined();
+		expect(model?.input).toContain("document");
+	});
+
+	test("accepts document input in custom model definitions", () => {
+		writeRawModelsJson({
+			"custom-provider": {
+				baseUrl: "https://example.invalid",
+				apiKey: "TEST_KEY",
+				api: "anthropic-messages",
+				models: [
+					{
+						id: "doc-model",
+						name: "doc-model",
+						reasoning: false,
+						input: ["text", "document"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 100000,
+						maxTokens: 8000,
+					},
+				],
+			},
+		});
+
+		const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+		const model = registry.find("custom-provider", "doc-model");
+		expect(model).toBeDefined();
+		expect(model?.input).toEqual(["text", "document"]);
+	});
+
 	describe("baseUrl override (no custom models)", () => {
 		test("overriding baseUrl keeps all built-in models", () => {
 			writeRawModelsJson({

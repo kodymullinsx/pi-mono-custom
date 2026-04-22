@@ -5,7 +5,7 @@
  * and converting the ANSI output to HTML.
  */
 
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { PromptContentBlock } from "@mariozechner/pi-ai";
 import type { Component } from "@mariozechner/pi-tui";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type { ToolDefinition, ToolRenderContext } from "../extensions/types.js";
@@ -120,7 +120,7 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 				// Build AgentToolResult from content array
 				// Cast content since session storage uses generic object types
 				const agentToolResult = {
-					content: result as (TextContent | ImageContent)[],
+					content: result as PromptContentBlock[],
 					details,
 					isError,
 				};

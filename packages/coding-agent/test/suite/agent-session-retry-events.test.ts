@@ -130,6 +130,75 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.eventsOfType("auto_retry_start")).toEqual([]);
 	});
 
+	it("does not strip attachments when retry is disabled", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: false } } });
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "Unsupported document attachment in request",
+			}),
+		]);
+
+		await harness.session.prompt("review this", {
+			attachments: [
+				{
+					type: "document",
+					mimeType: "application/pdf",
+					data: "ZmFrZQ==",
+					fileName: "evidence.pdf",
+				},
+			],
+		});
+
+		expect(harness.faux.state.callCount).toBe(1);
+		expect(harness.eventsOfType("auto_retry_start")).toEqual([]);
+		const user = harness.session.messages.find((message) => message.role === "user");
+		expect(user?.role).toBe("user");
+		expect(typeof user?.content).not.toBe("string");
+		expect(
+			user?.role === "user" && typeof user.content !== "string"
+				? user.content.some((part) => part.type === "document")
+				: false,
+		).toBe(true);
+	});
+
+	it("records attachment mutation details when retry strips a rejected user attachment", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } } });
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "Unsupported document attachment in request",
+			}),
+			fauxAssistantMessage("recovered"),
+		]);
+
+		await harness.session.prompt("review this", {
+			attachments: [
+				{
+					type: "document",
+					mimeType: "application/pdf",
+					data: "ZmFrZQ==",
+					fileName: "evidence.pdf",
+				},
+			],
+		});
+
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(harness.eventsOfType("auto_retry_start").map((event) => event.errorMessage)).toEqual([
+			"Unsupported document attachment in request [auto-retry removed document attachments from the latest user attachment message]",
+		]);
+		const user = harness.session.messages.find((message) => message.role === "user");
+		expect(user?.role).toBe("user");
+		expect(typeof user?.content).not.toBe("string");
+		expect(
+			user?.role === "user" && typeof user.content !== "string"
+				? user.content.some((part) => part.type === "document")
+				: false,
+		).toBe(false);
+	});
+
 	it("does not retry non-retryable errors", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
 		harnesses.push(harness);

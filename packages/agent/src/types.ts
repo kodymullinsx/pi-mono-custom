@@ -1,12 +1,11 @@
 import type {
 	AssistantMessage,
 	AssistantMessageEvent,
-	ImageContent,
 	Message,
 	Model,
+	PromptContentBlock,
 	SimpleStreamOptions,
 	streamSimple,
-	TextContent,
 	Tool,
 	ToolResultMessage,
 } from "@mariozechner/pi-ai";
@@ -55,6 +54,7 @@ export interface BeforeToolCallResult {
  * Merge semantics are field-by-field:
  * - `content`: if provided, replaces the tool result content array in full
  * - `details`: if provided, replaces the tool result details value in full
+ * - `newMessages`: if provided, replaces the supplemental post-tool messages in full
  * - `isError`: if provided, replaces the tool result error flag
  * - `terminate`: if provided, replaces the early-termination hint
  *
@@ -62,8 +62,9 @@ export interface BeforeToolCallResult {
  * There is no deep merge for `content` or `details`.
  */
 export interface AfterToolCallResult {
-	content?: (TextContent | ImageContent)[];
+	content?: PromptContentBlock[];
 	details?: unknown;
+	newMessages?: AgentMessage[];
 	isError?: boolean;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
@@ -290,9 +291,15 @@ export interface AgentState {
 /** Final or partial result produced by a tool. */
 export interface AgentToolResult<T> {
 	/** Text or image content returned to the model. */
-	content: (TextContent | ImageContent)[];
+	content: PromptContentBlock[];
 	/** Arbitrary structured details for logs or UI rendering. */
 	details: T;
+	/**
+	 * Supplemental messages appended immediately after the tool result.
+	 * Use this for metadata-first tool results followed by attachment-bearing
+	 * messages in the same turn.
+	 */
+	newMessages?: AgentMessage[];
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.

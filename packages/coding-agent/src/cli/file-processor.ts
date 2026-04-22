@@ -1,30 +1,212 @@
 /**
- * Process @file CLI arguments into text content and image attachments
+ * Process @file CLI arguments into text content and first-class attachments
  */
 
 import { access, readFile, stat } from "node:fs/promises";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { Api, AttachmentContent, ImageContent, Model } from "@mariozechner/pi-ai";
 import chalk from "chalk";
-import { resolve } from "path";
+import { basename, extname, resolve } from "path";
 import { resolveReadPath } from "../core/tools/path-utils.js";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.js";
+import { extractPDFPages, getPDFPageCount, PDF_AT_MENTION_INLINE_THRESHOLD, readPDF } from "../utils/pdf.js";
+import { getPDFCacheEntry } from "../utils/pdf-cache.js";
 
 export interface ProcessedFiles {
 	text: string;
-	images: ImageContent[];
+	attachments: AttachmentContent[];
 }
 
 export interface ProcessFileOptions {
 	/** Whether to auto-resize images to 2000x2000 max. Default: true */
 	autoResizeImages?: boolean;
+	/** Optional target model so @file handling can prepare model-compatible attachments. */
+	model?: Model<Api>;
 }
 
-/** Process @file arguments into text content and image attachments */
+const DOCUMENT_MIME_TYPES_BY_EXTENSION = new Map<string, string>([
+	[".pdf", "application/pdf"],
+	[".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+	[".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+	[".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+	[".xls", "application/vnd.ms-excel"],
+	[".xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12"],
+]);
+
+function detectSupportedDocumentMimeTypeFromFile(filePath: string): string | null {
+	return DOCUMENT_MIME_TYPES_BY_EXTENSION.get(extname(filePath).toLowerCase()) ?? null;
+}
+
+function supportsImageInput(model?: Model<Api>): boolean {
+	return model?.input.includes("image") ?? false;
+}
+
+function supportsDocumentInput(model?: Model<Api>): boolean {
+	return model?.input.includes("document") ?? false;
+}
+
+function supportsInlineDocumentAttachment(model: Model<Api> | undefined, mimeType: string): boolean {
+	return supportsDocumentInput(model) && mimeType === "application/pdf";
+}
+
+function buildPdfReferenceText(absolutePath: string, pageCount: number | null, reason: string): string {
+	const pageCountText = pageCount === null ? "an unknown number of pages" : `${pageCount} page(s)`;
+	return `<file name="${absolutePath}">[PDF referenced only: ${basename(absolutePath)} has ${pageCountText}. ${reason} Use the read tool with pages="1-5" to inspect specific ranges.]</file>\n`;
+}
+
+function buildPdfFallbackReason(baseReason: string, nativeAttachmentFailure?: string): string {
+	if (!nativeAttachmentFailure) {
+		return baseReason;
+	}
+	return `${baseReason} First-class PDF attachment failed: ${nativeAttachmentFailure}.`;
+}
+
+async function renderPdfToImageAttachments(
+	absolutePath: string,
+	autoResizeImages: boolean,
+	pageCount: number,
+): Promise<ImageContent[]> {
+	const fileStats = await stat(absolutePath);
+	const cacheEntry = await getPDFCacheEntry(absolutePath, fileStats.mtimeMs, { firstPage: 1, lastPage: pageCount });
+
+	let imagePaths = cacheEntry.imagePaths;
+	if (imagePaths.length === 0) {
+		const extractResult = await extractPDFPages(absolutePath, {
+			firstPage: 1,
+			lastPage: pageCount,
+			outputDir: cacheEntry.outputDir,
+		});
+		if (!extractResult.success) {
+			throw new Error(extractResult.error.message);
+		}
+		imagePaths = extractResult.data.file.imagePaths;
+	}
+
+	const attachments = (
+		await Promise.all(
+			imagePaths.map(async (imagePath) => {
+				const base64Image = (await readFile(imagePath)).toString("base64");
+				if (!autoResizeImages) {
+					return {
+						type: "image" as const,
+						mimeType: "image/jpeg",
+						data: base64Image,
+					};
+				}
+
+				const resized = await resizeImage({
+					type: "image",
+					data: base64Image,
+					mimeType: "image/jpeg",
+				});
+				if (!resized) {
+					return null;
+				}
+				return {
+					type: "image" as const,
+					mimeType: resized.mimeType,
+					data: resized.data,
+				};
+			}),
+		)
+	).filter((attachment): attachment is ImageContent => attachment !== null);
+
+	return attachments;
+}
+
+async function processPdfFile(
+	absolutePath: string,
+	options: { autoResizeImages: boolean; model?: Model<Api> },
+): Promise<ProcessedFiles> {
+	const pageCount = await getPDFPageCount(absolutePath);
+	const supportsDocuments = supportsInlineDocumentAttachment(options.model, "application/pdf");
+	let nativeAttachmentFailure: string | undefined;
+
+	if (supportsDocuments) {
+		const pdfResult = await readPDF(absolutePath);
+		if (pdfResult.success) {
+			return {
+				text: `<file name="${absolutePath}">[PDF attached: ${basename(absolutePath)}${pageCount ? `, ${pageCount} page(s)` : ""}]</file>\n`,
+				attachments: [
+					{
+						type: "document",
+						mimeType: "application/pdf",
+						data: pdfResult.data.file.base64,
+						fileName: basename(absolutePath),
+					},
+				],
+			};
+		}
+		nativeAttachmentFailure = pdfResult.error.message;
+	}
+
+	if (pageCount !== null && pageCount > PDF_AT_MENTION_INLINE_THRESHOLD) {
+		return {
+			text: buildPdfReferenceText(
+				absolutePath,
+				pageCount,
+				buildPdfFallbackReason(
+					"Inline PDF ingestion is limited for larger files in this path.",
+					nativeAttachmentFailure,
+				),
+			),
+			attachments: [],
+		};
+	}
+
+	if (!supportsImageInput(options.model)) {
+		return {
+			text: buildPdfReferenceText(
+				absolutePath,
+				pageCount,
+				buildPdfFallbackReason(
+					"The current model does not support inline PDF rendering in this path.",
+					nativeAttachmentFailure,
+				),
+			),
+			attachments: [],
+		};
+	}
+
+	if (pageCount === null) {
+		return {
+			text: buildPdfReferenceText(
+				absolutePath,
+				pageCount,
+				buildPdfFallbackReason(
+					"Pi could not determine the page count needed to prepare a safe inline rendering.",
+					nativeAttachmentFailure,
+				),
+			),
+			attachments: [],
+		};
+	}
+
+	const attachments = await renderPdfToImageAttachments(absolutePath, options.autoResizeImages, pageCount);
+	if (attachments.length === 0) {
+		return {
+			text: `<file name="${absolutePath}">[${buildPdfFallbackReason(
+				`PDF pages omitted: ${basename(absolutePath)} could not be resized below the inline image size limit.`,
+				nativeAttachmentFailure,
+			)}]</file>\n`,
+			attachments: [],
+		};
+	}
+
+	const nativeAttachmentPrefix = nativeAttachmentFailure
+		? `First-class PDF attachment failed: ${nativeAttachmentFailure}. `
+		: "";
+	return {
+		text: `<file name="${absolutePath}">[${nativeAttachmentPrefix}PDF pages 1-${attachments.length} attached as images from ${basename(absolutePath)}]</file>\n`,
+		attachments,
+	};
+}
+
+/** Process @file arguments into text content and first-class attachments */
 export async function processFileArguments(fileArgs: string[], options?: ProcessFileOptions): Promise<ProcessedFiles> {
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	let text = "";
-	const images: ImageContent[] = [];
+	const attachments: AttachmentContent[] = [];
 
 	for (const fileArg of fileArgs) {
 		// Expand and resolve path (handles ~ expansion and macOS screenshot Unicode spaces)
@@ -75,7 +257,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 				};
 			}
 
-			images.push(attachment);
+			attachments.push(attachment);
 
 			// Add text reference to image with optional dimension note
 			if (dimensionNote) {
@@ -83,6 +265,22 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 			} else {
 				text += `<file name="${absolutePath}"></file>\n`;
 			}
+			continue;
+		}
+
+		const documentMimeType = detectSupportedDocumentMimeTypeFromFile(absolutePath);
+		if (documentMimeType) {
+			if (documentMimeType === "application/pdf") {
+				const processedPdf = await processPdfFile(absolutePath, {
+					autoResizeImages,
+					model: options?.model,
+				});
+				text += processedPdf.text;
+				attachments.push(...processedPdf.attachments);
+				continue;
+			}
+
+			text += `<file name="${absolutePath}">[Document referenced only: ${basename(absolutePath)} cannot be sent inline in this path yet. Convert it to PDF or extract text before attaching.]</file>\n`;
 		} else {
 			// Handle text file
 			try {
@@ -96,5 +294,5 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		}
 	}
 
-	return { text, images };
+	return { text, attachments };
 }

@@ -27,6 +27,7 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
+	DocumentContent,
 	Model,
 	SimpleStreamOptions,
 	StopReason,
@@ -616,6 +617,8 @@ function convertMessages(
 											return { text: sanitizeSurrogates(c.text) };
 										case "image":
 											return { image: createImageBlock(c.mimeType, c.data) };
+										case "document":
+											return { document: createDocumentBlock(c) };
 										default:
 											throw new Error("Unknown user content type");
 									}
@@ -697,7 +700,9 @@ function convertMessages(
 						content: m.content.map((c) =>
 							c.type === "image"
 								? { image: createImageBlock(c.mimeType, c.data) }
-								: { text: sanitizeSurrogates(c.text) },
+								: c.type === "document"
+									? { document: createDocumentBlock(c) }
+									: { text: sanitizeSurrogates(c.text) },
 						),
 						status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
 					},
@@ -713,7 +718,9 @@ function convertMessages(
 							content: nextMsg.content.map((c) =>
 								c.type === "image"
 									? { image: createImageBlock(c.mimeType, c.data) }
-									: { text: sanitizeSurrogates(c.text) },
+									: c.type === "document"
+										? { document: createDocumentBlock(c) }
+										: { text: sanitizeSurrogates(c.text) },
 							),
 							status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
 						},
@@ -926,4 +933,67 @@ function createImageBlock(mimeType: string, data: string) {
 	}
 
 	return { source: { bytes }, format };
+}
+
+function getDocumentFormat(
+	mimeType: string,
+	fileName?: string,
+): "csv" | "doc" | "docx" | "html" | "md" | "pdf" | "txt" | "xls" | "xlsx" | undefined {
+	switch (mimeType) {
+		case "application/pdf":
+			return "pdf";
+		case "application/msword":
+			return "doc";
+		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+			return "docx";
+		case "text/html":
+			return "html";
+		case "text/markdown":
+			return "md";
+		case "text/plain":
+			return "txt";
+		case "text/csv":
+			return "csv";
+		case "application/vnd.ms-excel":
+			return "xls";
+		case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+			return "xlsx";
+		default: {
+			const lowerName = fileName?.toLowerCase();
+			if (!lowerName) return undefined;
+			if (lowerName.endsWith(".pdf")) return "pdf";
+			if (lowerName.endsWith(".docx")) return "docx";
+			if (lowerName.endsWith(".doc")) return "doc";
+			if (lowerName.endsWith(".xlsx")) return "xlsx";
+			if (lowerName.endsWith(".xls")) return "xls";
+			if (lowerName.endsWith(".csv")) return "csv";
+			if (lowerName.endsWith(".md")) return "md";
+			if (lowerName.endsWith(".html") || lowerName.endsWith(".htm")) return "html";
+			if (lowerName.endsWith(".txt")) return "txt";
+			return undefined;
+		}
+	}
+}
+
+function sanitizeDocumentName(fileName?: string): string {
+	const safeName = (fileName ?? "document")
+		.replace(/[^A-Za-z0-9 \-()[\]]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	return safeName.length > 0 ? safeName : "document";
+}
+
+function createDocumentBlock(block: DocumentContent) {
+	const format = getDocumentFormat(block.mimeType, block.fileName);
+	if (!format) {
+		throw new Error(`Unknown document type: ${block.mimeType}`);
+	}
+
+	return {
+		format,
+		name: sanitizeDocumentName(block.fileName),
+		source: {
+			bytes: Buffer.from(block.data, "base64"),
+		},
+	};
 }

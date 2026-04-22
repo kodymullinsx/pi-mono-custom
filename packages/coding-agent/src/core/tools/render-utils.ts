@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { PromptContentBlock } from "@mariozechner/pi-ai";
 import { getCapabilities, getImageDimensions, imageFallback } from "@mariozechner/pi-tui";
 import stripAnsi from "strip-ansi";
 import { sanitizeBinaryOutput } from "../../utils/shell.js";
@@ -28,13 +28,18 @@ export function normalizeDisplayText(text: string): string {
 }
 
 export function getTextOutput(
-	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> } | undefined,
+	result:
+		| {
+				content: Array<{ type: string; text?: string; data?: string; mimeType?: string; fileName?: string }>;
+		  }
+		| undefined,
 	showImages: boolean,
 ): string {
 	if (!result) return "";
 
 	const textBlocks = result.content.filter((c) => c.type === "text");
 	const imageBlocks = result.content.filter((c) => c.type === "image");
+	const documentBlocks = result.content.filter((c) => c.type === "document");
 
 	let output = textBlocks.map((c) => sanitizeBinaryOutput(stripAnsi(c.text || "")).replace(/\r/g, "")).join("\n");
 
@@ -51,11 +56,22 @@ export function getTextOutput(
 		output = output ? `${output}\n${imageIndicators}` : imageIndicators;
 	}
 
+	if (documentBlocks.length > 0) {
+		const documentIndicators = documentBlocks
+			.map((doc) => {
+				const name = doc.fileName ?? "document";
+				const mimeType = doc.mimeType ?? "application/octet-stream";
+				return `[document attached: ${name} (${mimeType})]`;
+			})
+			.join("\n");
+		output = output ? `${output}\n${documentIndicators}` : documentIndicators;
+	}
+
 	return output;
 }
 
 export type ToolRenderResultLike<TDetails> = {
-	content: (TextContent | ImageContent)[];
+	content: PromptContentBlock[];
 	details: TDetails;
 };
 

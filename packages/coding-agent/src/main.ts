@@ -7,7 +7,7 @@
 
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual, supportsXhigh } from "@mariozechner/pi-ai";
+import { type Api, type AttachmentContent, type Model, modelsAreEqual, supportsXhigh } from "@mariozechner/pi-ai";
 import { ProcessTerminal, setKeybindings, TUI } from "@mariozechner/pi-tui";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
@@ -115,19 +115,20 @@ async function prepareInitialMessage(
 	parsed: Args,
 	autoResizeImages: boolean,
 	stdinContent?: string,
+	model?: Model<Api>,
 ): Promise<{
 	initialMessage?: string;
-	initialImages?: ImageContent[];
+	initialAttachments?: AttachmentContent[];
 }> {
 	if (parsed.fileArgs.length === 0) {
 		return buildInitialMessage({ parsed, stdinContent });
 	}
 
-	const { text, images } = await processFileArguments(parsed.fileArgs, { autoResizeImages });
+	const { text, attachments } = await processFileArguments(parsed.fileArgs, { autoResizeImages, model });
 	return buildInitialMessage({
 		parsed,
 		fileText: text,
-		fileImages: images,
+		fileAttachments: attachments,
 		stdinContent,
 	});
 }
@@ -638,10 +639,11 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("readPipedStdin");
 
-	const { initialMessage, initialImages } = await prepareInitialMessage(
+	const { initialMessage, initialAttachments } = await prepareInitialMessage(
 		parsed,
 		settingsManager.getImageAutoResize(),
 		stdinContent,
+		session.model,
 	);
 	time("prepareInitialMessage");
 	initTheme(settingsManager.getTheme(), appMode === "interactive");
@@ -692,7 +694,7 @@ export async function main(args: string[], options?: MainOptions) {
 			migratedProviders,
 			modelFallbackMessage,
 			initialMessage,
-			initialImages,
+			initialAttachments,
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
 		});
@@ -719,7 +721,7 @@ export async function main(args: string[], options?: MainOptions) {
 			mode: toPrintOutputMode(appMode),
 			messages: parsed.messages,
 			initialMessage,
-			initialImages,
+			initialAttachments,
 		});
 		stopThemeWatcher();
 		restoreStdout();

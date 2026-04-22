@@ -13,9 +13,10 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
-	ImageContent,
+	DocumentContent,
 	Message,
 	Model,
+	PromptContentBlock,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -106,7 +107,16 @@ const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: (TextContent | ImageContent)[]):
+function formatDocumentSummary(block: DocumentContent): string {
+	const name = block.fileName ?? "document";
+	return `[document attached: ${name} (${block.mimeType})]`;
+}
+
+function canInlineDocument(block: DocumentContent): boolean {
+	return block.mimeType === "application/pdf";
+}
+
+function convertContentBlocks(content: PromptContentBlock[]):
 	| string
 	| Array<
 			| { type: "text"; text: string }
@@ -118,14 +128,22 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 						data: string;
 					};
 			  }
+			| {
+					type: "document";
+					source: {
+						type: "base64";
+						media_type: "application/pdf";
+						data: string;
+					};
+					title?: string;
+			  }
 	  > {
 	// If only text blocks, return as concatenated string for simplicity
-	const hasImages = content.some((c) => c.type === "image");
-	if (!hasImages) {
-		return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
+	const hasStructuredContent = content.some((block) => block.type === "image" || block.type === "document");
+	if (!hasStructuredContent) {
+		return sanitizeSurrogates(content.map((block) => (block as TextContent).text).join("\n"));
 	}
 
-	// If we have images, convert to content block array
 	const blocks = content.map((block) => {
 		if (block.type === "text") {
 			return {
@@ -133,22 +151,42 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 				text: sanitizeSurrogates(block.text),
 			};
 		}
+
+		if (block.type === "image") {
+			return {
+				type: "image" as const,
+				source: {
+					type: "base64" as const,
+					media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+					data: block.data,
+				},
+			};
+		}
+
+		if (canInlineDocument(block)) {
+			return {
+				type: "document" as const,
+				source: {
+					type: "base64" as const,
+					media_type: "application/pdf" as const,
+					data: block.data,
+				},
+				...(block.fileName ? { title: block.fileName } : {}),
+			};
+		}
+
 		return {
-			type: "image" as const,
-			source: {
-				type: "base64" as const,
-				media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-				data: block.data,
-			},
+			type: "text" as const,
+			text: sanitizeSurrogates(formatDocumentSummary(block)),
 		};
 	});
 
-	// If only images (no text), add placeholder text block
+	// If only media blocks (no text), add a small anchor text block.
 	const hasText = blocks.some((b) => b.type === "text");
 	if (!hasText) {
 		blocks.unshift({
 			type: "text" as const,
-			text: "(see attached image)",
+			text: "(see attached file)",
 		});
 	}
 
@@ -943,7 +981,8 @@ function convertMessages(
 							type: "text",
 							text: sanitizeSurrogates(item.text),
 						};
-					} else {
+					}
+					if (item.type === "image") {
 						return {
 							type: "image",
 							source: {
@@ -953,6 +992,21 @@ function convertMessages(
 							},
 						};
 					}
+					if (canInlineDocument(item)) {
+						return {
+							type: "document",
+							source: {
+								type: "base64",
+								media_type: "application/pdf",
+								data: item.data,
+							},
+							...(item.fileName ? { title: item.fileName } : {}),
+						};
+					}
+					return {
+						type: "text",
+						text: sanitizeSurrogates(formatDocumentSummary(item)),
+					};
 				});
 				const filteredBlocks = blocks.filter((b) => {
 					if (b.type === "text") {

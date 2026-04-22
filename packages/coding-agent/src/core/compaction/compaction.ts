@@ -234,13 +234,21 @@ export function estimateTokens(message: AgentMessage): number {
 
 	switch (message.role) {
 		case "user": {
-			const content = (message as { content: string | Array<{ type: string; text?: string }> }).content;
+			const content = (
+				message as {
+					content: string | Array<{ type: string; text?: string; fileName?: string }>;
+				}
+			).content;
 			if (typeof content === "string") {
 				chars = content.length;
 			} else if (Array.isArray(content)) {
 				for (const block of content) {
 					if (block.type === "text" && block.text) {
 						chars += block.text.length;
+					} else if (block.type === "image") {
+						chars += 4800;
+					} else if (block.type === "document") {
+						chars += (block.fileName ?? "document").length + 128;
 					}
 				}
 			}
@@ -270,6 +278,9 @@ export function estimateTokens(message: AgentMessage): number {
 					}
 					if (block.type === "image") {
 						chars += 4800; // Estimate images as 4000 chars, or 1200 tokens
+					}
+					if (block.type === "document") {
+						chars += (block.fileName ?? "document").length + 128;
 					}
 				}
 			}

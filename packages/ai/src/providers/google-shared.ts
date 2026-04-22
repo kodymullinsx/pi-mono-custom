@@ -3,7 +3,7 @@
  */
 
 import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
-import type { Context, ImageContent, Model, StopReason, TextContent, Tool } from "../types.js";
+import type { Context, DocumentContent, ImageContent, Model, StopReason, Tool } from "../types.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -84,6 +84,15 @@ function supportsMultimodalFunctionResponse(modelId: string): boolean {
 	return true;
 }
 
+function formatDocumentSummary(block: DocumentContent): string {
+	const name = block.fileName ?? "document";
+	return `[document attached: ${name} (${block.mimeType})]`;
+}
+
+function canInlineDocument(block: DocumentContent): boolean {
+	return block.mimeType === "application/pdf";
+}
+
 /**
  * Convert internal messages to Gemini Content[] format.
  */
@@ -107,7 +116,8 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				const parts: Part[] = msg.content.map((item) => {
 					if (item.type === "text") {
 						return { text: sanitizeSurrogates(item.text) };
-					} else {
+					}
+					if (item.type === "image") {
 						return {
 							inlineData: {
 								mimeType: item.mimeType,
@@ -115,6 +125,15 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 							},
 						};
 					}
+					if (model.input.includes("document") && canInlineDocument(item)) {
+						return {
+							inlineData: {
+								mimeType: item.mimeType,
+								data: item.data,
+							},
+						};
+					}
+					return { text: sanitizeSurrogates(formatDocumentSummary(item)) };
 				});
 				if (parts.length === 0) continue;
 				contents.push({
@@ -178,15 +197,29 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				parts,
 			});
 		} else if (msg.role === "toolResult") {
-			// Extract text and image content
-			const textContent = msg.content.filter((c): c is TextContent => c.type === "text");
-			const textResult = textContent.map((c) => c.text).join("\n");
+			// Extract text and media content
+			const textResult = msg.content
+				.map((c) => {
+					if (c.type === "text") {
+						return c.text;
+					}
+					if (c.type === "document" && !canInlineDocument(c)) {
+						return formatDocumentSummary(c);
+					}
+					return null;
+				})
+				.filter((c): c is string => c !== null)
+				.join("\n");
 			const imageContent = model.input.includes("image")
 				? msg.content.filter((c): c is ImageContent => c.type === "image")
+				: [];
+			const documentContent = model.input.includes("document")
+				? msg.content.filter((c): c is DocumentContent => c.type === "document" && canInlineDocument(c))
 				: [];
 
 			const hasText = textResult.length > 0;
 			const hasImages = imageContent.length > 0;
+			const hasDocuments = documentContent.length > 0;
 
 			// Gemini 3+ models support multimodal function responses with images nested inside
 			// functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /
@@ -194,7 +227,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
 			// Use "output" key for success, "error" key for errors as per SDK documentation
-			const responseValue = hasText ? sanitizeSurrogates(textResult) : hasImages ? "(see attached image)" : "";
+			const responseValue = hasText
+				? sanitizeSurrogates(textResult)
+				: hasImages || hasDocuments
+					? "(see attached file)"
+					: "";
 
 			const imageParts: Part[] = imageContent.map((imageBlock) => ({
 				inlineData: {
@@ -202,13 +239,20 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 					data: imageBlock.data,
 				},
 			}));
+			const documentParts: Part[] = documentContent.map((documentBlock) => ({
+				inlineData: {
+					mimeType: documentBlock.mimeType,
+					data: documentBlock.data,
+				},
+			}));
+			const mediaParts = [...imageParts, ...documentParts];
 
 			const includeId = requiresToolCallId(model.id);
 			const functionResponsePart: Part = {
 				functionResponse: {
 					name: msg.toolName,
 					response: msg.isError ? { error: responseValue } : { output: responseValue },
-					...(hasImages && modelSupportsMultimodalFunctionResponse && { parts: imageParts }),
+					...(mediaParts.length > 0 && modelSupportsMultimodalFunctionResponse && { parts: mediaParts }),
 					...(includeId ? { id: msg.toolCallId } : {}),
 				},
 			};
@@ -225,11 +269,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				});
 			}
 
-			// For Gemini < 3, add images in a separate user message
-			if (hasImages && !modelSupportsMultimodalFunctionResponse) {
+			// For Gemini < 3, add media in a separate user message
+			if (mediaParts.length > 0 && !modelSupportsMultimodalFunctionResponse) {
 				contents.push({
 					role: "user",
-					parts: [{ text: "Tool result image:" }, ...imageParts],
+					parts: [{ text: "Tool result file:" }, ...mediaParts],
 				});
 			}
 		}

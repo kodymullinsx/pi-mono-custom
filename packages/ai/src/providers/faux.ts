@@ -3,9 +3,11 @@ import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
 	Context,
-	ImageContent,
+	DocumentContent,
 	Message,
 	Model,
+	ModelInput,
+	PromptContentBlock,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
@@ -38,7 +40,7 @@ export interface FauxModelDefinition {
 	id: string;
 	name?: string;
 	reasoning?: boolean;
-	input?: ("text" | "image")[];
+	input?: ModelInput[];
 	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	contextWindow?: number;
 	maxTokens?: number;
@@ -133,7 +135,12 @@ function randomId(prefix: string): string {
 	return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
-function contentToText(content: string | Array<TextContent | ImageContent>): string {
+function formatDocumentSummary(block: DocumentContent): string {
+	const name = block.fileName ?? "document";
+	return `[document:${name}:${block.mimeType}:${block.data.length}]`;
+}
+
+function contentToText(content: string | PromptContentBlock[]): string {
 	if (typeof content === "string") {
 		return content;
 	}
@@ -142,7 +149,10 @@ function contentToText(content: string | Array<TextContent | ImageContent>): str
 			if (block.type === "text") {
 				return block.text;
 			}
-			return `[image:${block.mimeType}:${block.data.length}]`;
+			if (block.type === "image") {
+				return `[image:${block.mimeType}:${block.data.length}]`;
+			}
+			return formatDocumentSummary(block);
 		})
 		.join("\n");
 }

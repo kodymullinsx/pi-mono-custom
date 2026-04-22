@@ -76,4 +76,35 @@ describe("serializeConversation", () => {
 		expect(result).not.toContain("truncated");
 		expect(result).toContain(longText);
 	});
+
+	it("serializes image and document markers instead of dropping them", () => {
+		const messages: Message[] = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Please review these." },
+					{ type: "image", mimeType: "image/png", data: "abc" },
+					{ type: "document", mimeType: "application/pdf", data: "xyz", fileName: "evidence.pdf" },
+				],
+				timestamp: Date.now(),
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc1",
+				toolName: "read",
+				content: [
+					{ type: "text", text: "Rendered pages" },
+					{ type: "image", mimeType: "image/jpeg", data: "abc" },
+					{ type: "document", mimeType: "application/pdf", data: "xyz", fileName: "evidence.pdf" },
+				],
+				isError: false,
+				timestamp: Date.now(),
+			},
+		];
+
+		const result = serializeConversation(messages);
+
+		expect(result).toContain("[User]: Please review these.\n[image]\n[document: evidence.pdf]");
+		expect(result).toContain("[Tool result]: Rendered pages\n[image]\n[document: evidence.pdf]");
+	});
 });
