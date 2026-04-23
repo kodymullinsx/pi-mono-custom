@@ -840,16 +840,17 @@ export function convertMessages(
 					.join("\n");
 				const hasImages = toolMsg.content.some((c) => c.type === "image");
 				const documentBlock = toolMsg.content.find(isDocumentContentBlock);
+				const toolResultText = textResult.length > 0 ? textResult : "(see attached image)";
+				const serializedToolResultText =
+					toolMsg.isError && !/^error:/i.test(toolResultText) ? `Error: ${toolResultText}` : toolResultText;
 				if (documentBlock) {
 					throwUnsupportedDocumentSerialization(documentBlock, "tool results");
 				}
 
 				// Always send tool result with text (or placeholder if only images)
-				const hasText = textResult.length > 0;
-				// Some providers require the 'name' field in tool results
 				const toolResultMsg: ChatCompletionToolMessageParam = {
 					role: "tool",
-					content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+					content: sanitizeSurrogates(serializedToolResultText),
 					tool_call_id: toolMsg.toolCallId,
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {

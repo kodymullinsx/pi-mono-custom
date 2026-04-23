@@ -184,4 +184,29 @@ describe("processFileArguments PDF handling", () => {
 			"[First-class PDF attachment failed: Corrupted PDF. PDF pages 1-1 attached as images from fallback.pdf]",
 		);
 	});
+
+	test("reports partial inline PDF attachment preparation truthfully", async () => {
+		const pdfPath = join(tempRoot, "partial.pdf");
+		writeFileSync(pdfPath, "%PDF-1.7");
+
+		pdfMocks.getPDFPageCount.mockResolvedValue(3);
+		pdfMocks.renderPdfPagesToImageBlocks.mockResolvedValue([
+			{
+				type: "image",
+				data: Buffer.from("page-1").toString("base64"),
+				mimeType: "image/jpeg",
+			},
+		]);
+
+		const result = await processFileArguments([pdfPath], {
+			autoResizeImages: true,
+			model: createModel(["text", "image"]),
+		});
+
+		expect(result.attachments).toHaveLength(1);
+		expect(result.text).toContain("Only 1 of 3 PDF page(s) from partial.pdf could be attached as images.");
+		expect(result.text).toContain(
+			"Remaining page(s) were omitted because they could not be resized below the inline image size limit.",
+		);
+	});
 });

@@ -13,4 +13,12 @@ describe("export HTML document content rendering", () => {
 		expect(templateJs).toMatch(/message-documents/);
 		expect(templateJs).toMatch(/message-document/);
 	});
+
+	it("includes pages and region metadata in read execution headers", () => {
+		expect(templateJs).toMatch(/const pages = typeof args\.pages === 'string' \? args\.pages : undefined;/);
+		expect(templateJs).toMatch(/pages=\$\{escapeHtml\(pages\)\}/);
+		expect(templateJs).toMatch(
+			/region=\$\{region\.left\},\$\{region\.top\},\$\{region\.width\}x\$\{region\.height\}/,
+		);
+	});
 });

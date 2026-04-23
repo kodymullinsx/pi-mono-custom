@@ -75,6 +75,7 @@ type IndexRegenerationResult =
 	| { status: "failed"; message: string };
 
 const reportedG1DegradedSessions = new Set<string>();
+const reportedAttachmentBypassSessions = new Set<string>();
 
 function logWithLevel(level: "warn" | "error", message: string, error?: unknown): void {
 	const ts = new Date().toISOString();
@@ -186,6 +187,17 @@ function reportG1DegradedModeOnce(ctx: ExtensionContext): void {
 	reportDomainMemoryMessage(
 		ctx,
 		"Domain memory intent gate is unavailable, so semantic routing is running in fail-open mode for this session.",
+		"warning",
+	);
+}
+
+function reportAttachmentBypassOnce(ctx: ExtensionContext): void {
+	const key = getSessionNoticeKey(ctx);
+	if (reportedAttachmentBypassSessions.has(key)) return;
+	reportedAttachmentBypassSessions.add(key);
+	reportDomainMemoryMessage(
+		ctx,
+		"Domain memory semantic routing was bypassed for this attachment-heavy turn, so only the memory index was injected.",
 		"warning",
 	);
 }
@@ -556,6 +568,9 @@ export default function domainMemoryExtension(pi: ExtensionAPI): void {
 			context = await buildScopedContext(prompt, "work", ctx.signal);
 		} else {
 			reportG1DegradedModeOnce(ctx);
+			if (bypassAttachmentRouting) {
+				reportAttachmentBypassOnce(ctx);
+			}
 			context = bypassAttachmentRouting
 				? await buildScopeIndexOnlyContext("personal", "attachment-bypass")
 				: await buildScopedContext(prompt, "personal", ctx.signal);

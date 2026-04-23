@@ -218,14 +218,14 @@ function buildPersistedAttachmentPlaceholder(
 	if (block.type === "image") {
 		return {
 			type: "text",
-			text: `[image binary omitted from persisted session (${block.mimeType})]`,
+			text: "[image]",
 		};
 	}
 
 	const name = block.fileName ?? "document";
 	return {
 		type: "text",
-		text: `[document binary omitted from persisted session: ${name} (${block.mimeType})]`,
+		text: name === "document" ? "[document]" : `[document: ${name}]`,
 	};
 }
 

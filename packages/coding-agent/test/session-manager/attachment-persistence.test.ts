@@ -81,9 +81,9 @@ describe("SessionManager attachment persistence", () => {
 		expect(persisted).not.toContain("raw-image-bytes");
 		expect(persisted).not.toContain("raw-document-bytes");
 		expect(persisted).not.toContain("tool-document-bytes");
-		expect(persisted).toContain("[image binary omitted from persisted session (image/png)]");
-		expect(persisted).toContain("[document binary omitted from persisted session: evidence.pdf (application/pdf)]");
-		expect(persisted).toContain("[document binary omitted from persisted session: tool.pdf (application/pdf)]");
+		expect(persisted).toContain("[image]");
+		expect(persisted).toContain("[document: evidence.pdf]");
+		expect(persisted).toContain("[document: tool.pdf]");
 
 		const reloaded = SessionManager.open(sessionFile!, tempDir);
 		const context = reloaded.buildSessionContext();
@@ -92,15 +92,15 @@ describe("SessionManager attachment persistence", () => {
 			role: "user",
 			content: [
 				{ type: "text", text: "Review these files." },
-				{ type: "text", text: "[image binary omitted from persisted session (image/png)]" },
-				{ type: "text", text: "[document binary omitted from persisted session: evidence.pdf (application/pdf)]" },
+				{ type: "text", text: "[image]" },
+				{ type: "text", text: "[document: evidence.pdf]" },
 			],
 		});
 		expect(context.messages[2]).toMatchObject({
 			role: "custom",
 			content: [
 				{ type: "text", text: "Read attachment prepared for model inspection." },
-				{ type: "text", text: "[document binary omitted from persisted session: tool.pdf (application/pdf)]" },
+				{ type: "text", text: "[document: tool.pdf]" },
 			],
 		});
 
@@ -111,7 +111,7 @@ describe("SessionManager attachment persistence", () => {
 			role: "user",
 			content: [
 				{ type: "text", text: "Read attachment prepared for model inspection." },
-				{ type: "text", text: "[document binary omitted from persisted session: tool.pdf (application/pdf)]" },
+				{ type: "text", text: "[document: tool.pdf]" },
 			],
 		});
 	});

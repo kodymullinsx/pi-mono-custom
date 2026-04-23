@@ -928,12 +928,25 @@
             const filePath = str(args.file_path ?? args.path);
             const offset = args.offset;
             const limit = args.limit;
+            const pages = typeof args.pages === 'string' ? args.pages : undefined;
+            const region = typeof args.region === 'object' && args.region !== null ? args.region : undefined;
 
             let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''));
             if (filePath !== null && (offset !== undefined || limit !== undefined)) {
               const startLine = offset ?? 1;
               const endLine = limit !== undefined ? startLine + limit - 1 : '';
               pathHtml += `<span class="line-numbers">:${startLine}${endLine ? '-' + endLine : ''}</span>`;
+            }
+            if (pages) {
+              pathHtml += `<span class="line-numbers"> pages=${escapeHtml(pages)}</span>`;
+            }
+            if (
+              typeof region?.left === 'number' &&
+              typeof region?.top === 'number' &&
+              typeof region?.width === 'number' &&
+              typeof region?.height === 'number'
+            ) {
+              pathHtml += `<span class="line-numbers"> region=${region.left},${region.top},${region.width}x${region.height}</span>`;
             }
 
             html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;

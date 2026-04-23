@@ -236,6 +236,9 @@ export function convertResponsesMessages<TApi extends Api>(
 			const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
 			const hasText = textResult.length > 0;
 			const [callId] = msg.toolCallId.split("|");
+			const toolResultText = hasText ? textResult : "(see attached image)";
+			const serializedToolResultText =
+				msg.isError && !/^error:/i.test(toolResultText) ? `Error: ${toolResultText}` : toolResultText;
 
 			let output: string | ResponseFunctionCallOutputItemList;
 			if (documentBlock) {
@@ -244,10 +247,10 @@ export function convertResponsesMessages<TApi extends Api>(
 			if (hasImages && model.input.includes("image")) {
 				const contentParts: ResponseFunctionCallOutputItemList = [];
 
-				if (hasText) {
+				if (hasText || msg.isError) {
 					contentParts.push({
 						type: "input_text",
-						text: sanitizeSurrogates(textResult),
+						text: sanitizeSurrogates(serializedToolResultText),
 					});
 				}
 
@@ -263,7 +266,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
 				output = contentParts;
 			} else {
-				output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
+				output = sanitizeSurrogates(serializedToolResultText);
 			}
 
 			messages.push({

@@ -7,7 +7,7 @@ import type { Api, AttachmentContent, ImageContent, Model } from "@mariozechner/
 import chalk from "chalk";
 import { basename, extname, resolve } from "path";
 import { resolveReadPath } from "../core/tools/path-utils.js";
-import { formatDimensionNote, resizeImage } from "../utils/image-resize.js";
+import { formatDimensionNote, getImageDimensions, resizeImage } from "../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.js";
 import {
 	getPDFPageCount,
@@ -152,6 +152,16 @@ async function processPdfFile(
 	const nativeAttachmentPrefix = nativeAttachmentFailure
 		? `First-class PDF attachment failed: ${nativeAttachmentFailure}. `
 		: "";
+	if (attachments.length < pageCount) {
+		return {
+			text:
+				`<file name="${absolutePath}">[` +
+				`${nativeAttachmentPrefix}Only ${attachments.length} of ${pageCount} PDF page(s) from ${basename(absolutePath)} ` +
+				`could be attached as images. Remaining page(s) were omitted because they could not be resized below the inline image size limit.` +
+				`]</file>\n`,
+			attachments,
+		};
+	}
 	return {
 		text: `<file name="${absolutePath}">[${nativeAttachmentPrefix}PDF pages 1-${attachments.length} attached as images from ${basename(absolutePath)}]</file>\n`,
 		attachments,
@@ -196,6 +206,11 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 			if (autoResizeImages) {
 				const resized = await resizeImage({ type: "image", data: base64Content, mimeType });
 				if (!resized) {
+					const dimensions = await getImageDimensions({ type: "image", data: base64Content, mimeType });
+					if (!dimensions) {
+						text += `<file name="${absolutePath}">[Image omitted: Pi could not process this image for inline attachment.]</file>\n`;
+						continue;
+					}
 					text += `<file name="${absolutePath}">[Image omitted: could not be resized below the inline image size limit.]</file>\n`;
 					continue;
 				}

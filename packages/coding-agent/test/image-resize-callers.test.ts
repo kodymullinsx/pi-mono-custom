@@ -5,12 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/utils/image-resize.js", () => ({
 	resizeImage: vi.fn(),
+	getImageDimensions: vi.fn(),
 	formatDimensionNote: vi.fn(() => undefined),
 }));
 
 import { processFileArguments } from "../src/cli/file-processor.js";
 import { createReadTool } from "../src/core/tools/read.js";
-import { resizeImage } from "../src/utils/image-resize.js";
+import { getImageDimensions, resizeImage } from "../src/utils/image-resize.js";
 
 const TINY_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
@@ -23,6 +24,8 @@ describe("image resize callers", () => {
 		mkdirSync(testDir, { recursive: true });
 		vi.mocked(resizeImage).mockReset();
 		vi.mocked(resizeImage).mockResolvedValue(null);
+		vi.mocked(getImageDimensions).mockReset();
+		vi.mocked(getImageDimensions).mockResolvedValue({ width: 100, height: 100 });
 	});
 
 	afterEach(() => {
@@ -49,5 +52,17 @@ describe("image resize callers", () => {
 
 		expect(result.attachments).toHaveLength(0);
 		expect(result.text).toContain("Image omitted");
+	});
+
+	it("read tool errors when image processing fails outright", async () => {
+		const imagePath = join(testDir, "test.png");
+		writeFileSync(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+		vi.mocked(getImageDimensions).mockResolvedValue(null);
+
+		const tool = createReadTool(testDir);
+
+		await expect(tool.execute("test-read-image-error", { path: imagePath })).rejects.toThrow(
+			/image processing failed/i,
+		);
 	});
 });

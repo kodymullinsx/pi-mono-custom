@@ -205,6 +205,20 @@ function buildPdfReadNote(
 		: `Showing PDF ${range}.`;
 }
 
+function buildPdfPartialReadNote(
+	firstPage: number,
+	lastPage: number,
+	pageCount: number | null | undefined,
+	requestedPageCount: number,
+	renderedPageCount: number,
+	navigation: { nextRange?: string },
+): string {
+	const range = firstPage === lastPage ? `page ${firstPage}` : `pages ${firstPage}-${lastPage}`;
+	const totalSuffix = pageCount !== null && pageCount !== undefined ? ` of ${pageCount}` : "";
+	const continueSuffix = navigation.nextRange ? ` Use pages="${navigation.nextRange}" to continue.` : "";
+	return `Prepared ${renderedPageCount} of ${requestedPageCount} requested PDF ${range}${totalSuffix}.${continueSuffix}`;
+}
+
 async function prepareInlineImageBlock(
 	image: Extract<PromptContentBlock, { type: "image" }>,
 	options: {
@@ -213,12 +227,13 @@ async function prepareInlineImageBlock(
 		includeDimensionNote?: boolean;
 	},
 ): Promise<{ block?: Extract<PromptContentBlock, { type: "image" }>; dimensionNote?: string }> {
+	let knownDimensions: { width: number; height: number } | null | undefined;
 	if (options.region) {
-		const dimensions = await getImageDimensions(image);
-		if (!dimensions) {
-			return {};
+		knownDimensions = await getImageDimensions(image);
+		if (!knownDimensions) {
+			throw new Error("Image processing failed while preparing the requested crop.");
 		}
-		if (!clipImageCropRegion(options.region, dimensions.width, dimensions.height)) {
+		if (!clipImageCropRegion(options.region, knownDimensions.width, knownDimensions.height)) {
 			throw new Error("The requested region does not overlap the image bounds.");
 		}
 	}
@@ -229,6 +244,10 @@ async function prepareInlineImageBlock(
 
 	const resized = await resizeImage(image, options.region ? { crop: options.region } : undefined);
 	if (!resized) {
+		const fallbackDimensions = knownDimensions ?? (await getImageDimensions(image));
+		if (!fallbackDimensions) {
+			throw new Error("Image processing failed while preparing the attachment.");
+		}
 		return {};
 	}
 
@@ -463,14 +482,31 @@ export function createReadToolDefinition(
 											: renderedPageCount > 0
 												? firstPage + renderedPageCount - 1
 												: firstPage;
+									const requestedPageCount =
+										effectiveRange?.lastPage && Number.isFinite(effectiveRange.lastPage)
+											? Math.max(1, effectiveRange.lastPage - firstPage + 1)
+											: (pageCount ?? renderedPageCount);
 									const navigation = buildPdfNavigation(firstPage, lastPage, pageCount);
-									let pdfNote = buildPdfReadNote(firstPage, lastPage, pageCount, navigation);
+									let pdfNote =
+										renderedPageCount > 0 && renderedPageCount < requestedPageCount
+											? buildPdfPartialReadNote(
+													firstPage,
+													lastPage,
+													pageCount,
+													requestedPageCount,
+													renderedPageCount,
+													navigation,
+												)
+											: buildPdfReadNote(firstPage, lastPage, pageCount, navigation);
 									if (dimensionNote) {
 										pdfNote += `\n${dimensionNote}`;
 									}
 									if (renderedPageCount === 0) {
 										pdfNote +=
-											"\n[PDF pages omitted: could not be resized below the inline image size limit.]";
+											"\n[Requested PDF pages were omitted because they could not be resized below the inline image size limit.]";
+									} else if (renderedPageCount < requestedPageCount) {
+										pdfNote +=
+											"\n[Some requested PDF pages were omitted because they could not be resized below the inline image size limit.]";
 									}
 									if (nonVisionImageNote) {
 										pdfNote += `\n${nonVisionImageNote}`;

@@ -204,6 +204,43 @@ describe("read tool PDF support", () => {
 		});
 	});
 
+	it("reports partial PDF page omissions truthfully when only some requested pages can be prepared", async () => {
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue([
+			{
+				type: "image",
+				mimeType: "image/jpeg",
+				data: "resized-cGFnZS0x",
+			},
+		]);
+
+		const tool = createReadToolDefinition(testDir);
+		const result = await tool.execute(
+			"read-pdf-pages-partial",
+			{ path: pdfPath, pages: "2-3" },
+			undefined,
+			undefined,
+			createExtensionContext(),
+		);
+
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text:
+				'Prepared 1 of 2 requested PDF pages 2-3 of 12. Use pages="4-5" to continue.\n' +
+				"[Some requested PDF pages were omitted because they could not be resized below the inline image size limit.]",
+		});
+		expect(result.details).toEqual({
+			pdf: {
+				pageCount: 12,
+				renderedPages: 1,
+				firstPage: 2,
+				lastPage: 3,
+				rangeSize: 2,
+				previousRange: "1",
+				nextRange: "4-5",
+			},
+		});
+	});
+
 	it("forces single-page raster rendering for PDF region reads", async () => {
 		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue([
 			{

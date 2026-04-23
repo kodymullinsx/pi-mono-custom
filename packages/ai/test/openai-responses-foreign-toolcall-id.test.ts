@@ -63,4 +63,47 @@ describe("OpenAI Responses foreign tool call ID normalization", () => {
 		expect(functionCall.id?.length ?? 0).toBeLessThanOrEqual(64);
 		expect(functionCall.id).toMatch(/^fc_[A-Za-z0-9]+$/);
 	});
+
+	it("preserves tool-result error semantics in serialized function_call_output text", () => {
+		const model = getModel("openai-codex", "gpt-5.3-codex");
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_error|fc_error",
+					name: "read",
+					arguments: { path: "evidence.pdf" },
+				},
+			],
+			api: "openai-responses",
+			provider: "openai-codex",
+			model: "gpt-5.3-codex",
+			usage,
+			stopReason: "toolUse",
+			timestamp: Date.now() - 2000,
+		};
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "call_error|fc_error",
+			toolName: "read",
+			content: [{ type: "text", text: "No result provided" }],
+			isError: true,
+			timestamp: Date.now() - 1000,
+		};
+		const context: Context = {
+			messages: [{ role: "user", content: "Read the file.", timestamp: Date.now() - 3000 }, assistant, toolResult],
+		};
+
+		const input = convertResponsesMessages(model, context, new Set(["openai", "openai-codex", "opencode"]));
+		const functionCallOutput = input.find((item) => item.type === "function_call_output");
+
+		expect(functionCallOutput).toBeDefined();
+		expect(functionCallOutput?.type).toBe("function_call_output");
+		if (!functionCallOutput || functionCallOutput.type !== "function_call_output") {
+			throw new Error("Expected function_call_output");
+		}
+
+		expect(functionCallOutput.output).toBe("Error: No result provided");
+	});
 });

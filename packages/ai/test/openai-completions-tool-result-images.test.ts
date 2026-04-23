@@ -98,4 +98,48 @@ describe("openai-completions convertMessages", () => {
 		);
 		expect(imageParts.length).toBe(2);
 	});
+
+	it("prefixes tool-result errors so completions models do not see them as normal output", () => {
+		const baseModel = getModel("openai", "gpt-4o-mini");
+		const model: Model<"openai-completions"> = {
+			...baseModel,
+			api: "openai-completions",
+			input: ["text", "image"],
+		};
+
+		const now = Date.now();
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "tool-error", name: "read", arguments: { path: "missing.pdf" } }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: emptyUsage,
+			stopReason: "toolUse",
+			timestamp: now,
+		};
+
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Read the file", timestamp: now - 2 },
+				assistantMessage,
+				{
+					role: "toolResult",
+					toolCallId: "tool-error",
+					toolName: "read",
+					content: [{ type: "text", text: "No result provided" }],
+					isError: true,
+					timestamp: now + 1,
+				} satisfies ToolResultMessage,
+			],
+		};
+
+		const messages = convertMessages(model, context, compat);
+		expect(messages).toHaveLength(3);
+		expect(messages[2]).toMatchObject({
+			role: "tool",
+			content: "Error: No result provided",
+			tool_call_id: "tool-error",
+		});
+	});
 });
