@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +31,11 @@ function assistantMessage(text: string) {
 	};
 }
 
+const USER_IMAGE_DATA = Buffer.from("raw-image-bytes").toString("base64");
+const USER_DOCUMENT_DATA = Buffer.from("raw-document-bytes").toString("base64");
+const TOOL_DOCUMENT_DATA = Buffer.from("tool-document-bytes").toString("base64");
+const FORK_IMAGE_DATA = Buffer.from("fork-image-bytes").toString("base64");
+
 describe("SessionManager attachment persistence", () => {
 	const tempDirs: string[] = [];
 
@@ -40,7 +45,7 @@ describe("SessionManager attachment persistence", () => {
 		}
 	});
 
-	it("omits attachment binary data from persisted session files and reloads placeholder text instead", () => {
+	it("keeps attachment binary data out of JSONL while restoring native attachments on reload", () => {
 		const tempDir = createTempDir();
 		tempDirs.push(tempDir);
 
@@ -49,11 +54,11 @@ describe("SessionManager attachment persistence", () => {
 			role: "user",
 			content: [
 				{ type: "text", text: "Review these files." },
-				{ type: "image", mimeType: "image/png", data: "raw-image-bytes" },
+				{ type: "image", mimeType: "image/png", data: USER_IMAGE_DATA },
 				{
 					type: "document",
 					mimeType: "application/pdf",
-					data: "raw-document-bytes",
+					data: USER_DOCUMENT_DATA,
 					fileName: "evidence.pdf",
 				},
 			],
@@ -67,7 +72,7 @@ describe("SessionManager attachment persistence", () => {
 				{
 					type: "document",
 					mimeType: "application/pdf",
-					data: "tool-document-bytes",
+					data: TOOL_DOCUMENT_DATA,
 					fileName: "tool.pdf",
 				},
 			],
@@ -84,6 +89,11 @@ describe("SessionManager attachment persistence", () => {
 		expect(persisted).toContain("[image]");
 		expect(persisted).toContain("[document: evidence.pdf]");
 		expect(persisted).toContain("[document: tool.pdf]");
+		expect(persisted).toContain("_piAttachmentRef");
+
+		const attachmentDir = sessionFile!.replace(/\.jsonl$/i, ".attachments");
+		expect(existsSync(attachmentDir)).toBe(true);
+		expect(readdirSync(attachmentDir)).toHaveLength(3);
 
 		const reloaded = SessionManager.open(sessionFile!, tempDir);
 		const context = reloaded.buildSessionContext();
@@ -92,15 +102,25 @@ describe("SessionManager attachment persistence", () => {
 			role: "user",
 			content: [
 				{ type: "text", text: "Review these files." },
-				{ type: "text", text: "[image]" },
-				{ type: "text", text: "[document: evidence.pdf]" },
+				{ type: "image", mimeType: "image/png", data: USER_IMAGE_DATA },
+				{
+					type: "document",
+					mimeType: "application/pdf",
+					data: USER_DOCUMENT_DATA,
+					fileName: "evidence.pdf",
+				},
 			],
 		});
 		expect(context.messages[2]).toMatchObject({
 			role: "custom",
 			content: [
 				{ type: "text", text: "Read attachment prepared for model inspection." },
-				{ type: "text", text: "[document: tool.pdf]" },
+				{
+					type: "document",
+					mimeType: "application/pdf",
+					data: TOOL_DOCUMENT_DATA,
+					fileName: "tool.pdf",
+				},
 			],
 		});
 
@@ -111,8 +131,50 @@ describe("SessionManager attachment persistence", () => {
 			role: "user",
 			content: [
 				{ type: "text", text: "Read attachment prepared for model inspection." },
-				{ type: "text", text: "[document: tool.pdf]" },
+				{
+					type: "document",
+					mimeType: "application/pdf",
+					data: TOOL_DOCUMENT_DATA,
+					fileName: "tool.pdf",
+				},
 			],
 		});
+	});
+
+	it("re-persists hydrated attachments when forking a session", () => {
+		const sourceDir = createTempDir();
+		const forkDir = createTempDir();
+		tempDirs.push(sourceDir, forkDir);
+
+		const source = SessionManager.create(sourceDir, sourceDir);
+		source.appendMessage({
+			role: "user",
+			content: [
+				{ type: "text", text: "Inspect this artifact." },
+				{ type: "image", mimeType: "image/png", data: FORK_IMAGE_DATA },
+			],
+			timestamp: Date.now(),
+		});
+		source.appendMessage(assistantMessage("Done."));
+
+		const sourceFile = source.getSessionFile();
+		expect(sourceFile).toBeDefined();
+
+		const forked = SessionManager.forkFrom(sourceFile!, forkDir, forkDir);
+		const forkContext = forked.buildSessionContext();
+		expect(forkContext.messages[0]).toMatchObject({
+			role: "user",
+			content: [
+				{ type: "text", text: "Inspect this artifact." },
+				{ type: "image", mimeType: "image/png", data: FORK_IMAGE_DATA },
+			],
+		});
+
+		const forkFile = forked.getSessionFile();
+		expect(forkFile).toBeDefined();
+		const forkPersisted = readFileSync(forkFile!, "utf-8");
+		expect(forkPersisted).not.toContain(FORK_IMAGE_DATA);
+		expect(forkPersisted).toContain("_piAttachmentRef");
+		expect(existsSync(forkFile!.replace(/\.jsonl$/i, ".attachments"))).toBe(true);
 	});
 });

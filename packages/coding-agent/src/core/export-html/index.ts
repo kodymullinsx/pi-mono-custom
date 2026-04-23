@@ -1,4 +1,5 @@
 import type { AgentState } from "@mariozechner/pi-agent-core";
+import type { PromptContentBlock, TextContent } from "@mariozechner/pi-ai";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.js";
@@ -129,11 +130,60 @@ function generateThemeVars(themeName?: string): string {
 interface SessionData {
 	header: ReturnType<SessionManager["getHeader"]>;
 	entries: ReturnType<SessionManager["getEntries"]>;
+	downloadEntries?: SessionEntry[];
 	leafId: string | null;
 	systemPrompt?: string;
 	tools?: Array<Pick<ToolDefinition, "name" | "description" | "parameters">>;
 	/** Pre-rendered HTML for custom tool calls/results, keyed by tool call ID */
 	renderedTools?: Record<string, RenderedToolHtml>;
+}
+
+function buildExportAttachmentPlaceholder(
+	block: Extract<PromptContentBlock, { type: "image" | "document" }>,
+): TextContent {
+	if (block.type === "image") {
+		return { type: "text", text: "[image]" };
+	}
+
+	const name = block.fileName ?? "document";
+	return {
+		type: "text",
+		text: name === "document" ? "[document]" : `[document: ${name}]`,
+	};
+}
+
+function stripAttachmentBlocksForDownload(content: PromptContentBlock[]): PromptContentBlock[] {
+	let changed = false;
+	const sanitized = content.map((block) => {
+		if (block.type === "image" || block.type === "document") {
+			changed = true;
+			return buildExportAttachmentPlaceholder(block);
+		}
+		return block;
+	});
+	return changed ? sanitized : content;
+}
+
+function buildDownloadEntries(entries: SessionEntry[]): SessionEntry[] {
+	return entries.map((entry) => {
+		if (
+			entry.type === "message" &&
+			(entry.message.role === "user" || entry.message.role === "toolResult" || entry.message.role === "custom") &&
+			typeof entry.message.content !== "string"
+		) {
+			const sanitizedContent = stripAttachmentBlocksForDownload(entry.message.content);
+			return sanitizedContent === entry.message.content
+				? entry
+				: { ...entry, message: { ...entry.message, content: sanitizedContent } };
+		}
+
+		if (entry.type === "custom_message" && typeof entry.content !== "string") {
+			const sanitizedContent = stripAttachmentBlocksForDownload(entry.content);
+			return sanitizedContent === entry.content ? entry : { ...entry, content: sanitizedContent };
+		}
+
+		return entry;
+	});
 }
 
 /**
@@ -262,6 +312,7 @@ export async function exportSessionToHtml(
 	const sessionData: SessionData = {
 		header: sm.getHeader(),
 		entries,
+		downloadEntries: buildDownloadEntries(entries),
 		leafId: sm.getLeafId(),
 		systemPrompt: state?.systemPrompt,
 		tools: state?.tools?.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
@@ -292,10 +343,12 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 	}
 
 	const sm = SessionManager.open(inputPath);
+	const entries = sm.getEntries();
 
 	const sessionData: SessionData = {
 		header: sm.getHeader(),
-		entries: sm.getEntries(),
+		entries,
+		downloadEntries: buildDownloadEntries(entries),
 		leafId: sm.getLeafId(),
 		systemPrompt: undefined,
 		tools: undefined,

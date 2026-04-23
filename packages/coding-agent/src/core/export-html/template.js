@@ -12,7 +12,7 @@
         bytes[i] = binary.charCodeAt(i);
       }
       const data = JSON.parse(new TextDecoder('utf-8').decode(bytes));
-      const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
+      const { header, entries, downloadEntries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
 
       // ============================================================
       // URL PARAMETER HANDLING
@@ -1067,7 +1067,8 @@
         if (header) {
           lines.push(JSON.stringify({ type: 'header', ...header }));
         }
-        for (const entry of entries) {
+        const jsonlEntries = Array.isArray(downloadEntries) ? downloadEntries : entries;
+        for (const entry of jsonlEntries) {
           lines.push(JSON.stringify(entry));
         }
         const jsonlContent = lines.join('\n');
