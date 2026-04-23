@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the unused root exports `getApiProviders()` and `getOverflowPatterns()` as public API cleanup.
+
 ### Fixed
 
 - Fixed `google-gemini-cli` built-in model discovery to include `gemini-3.1-flash-lite-preview`, so Cloud Code Assist model lists expose it without requiring manual `--model` fallback selection ([#3545](https://github.com/badlogic/pi-mono/issues/3545))

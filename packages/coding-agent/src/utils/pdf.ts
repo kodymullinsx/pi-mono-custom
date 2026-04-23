@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, extname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { execCommand } from "../core/exec.js";
 import { resizeImage } from "./image-resize.js";
@@ -48,10 +48,6 @@ export interface PDFExtractPagesData {
 let pdfinfoAvailable: boolean | undefined;
 let pdftoppmAvailable: boolean | undefined;
 
-export function isPDFPath(filePath: string): boolean {
-	return extname(filePath).toLowerCase() === ".pdf";
-}
-
 export function parsePDFPageRange(pages: string): { firstPage: number; lastPage: number } | null {
 	const trimmed = pages.trim();
 	if (!trimmed) {
@@ -82,11 +78,6 @@ export function parsePDFPageRange(pages: string): { firstPage: number; lastPage:
 	}
 
 	return { firstPage: first, lastPage: last };
-}
-
-export function resetPDFBinaryCache(): void {
-	pdfinfoAvailable = undefined;
-	pdftoppmAvailable = undefined;
 }
 
 async function checkBinaryAvailable(command: string, args: string[]): Promise<boolean> {
