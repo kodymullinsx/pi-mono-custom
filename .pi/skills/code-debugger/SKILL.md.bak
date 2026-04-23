@@ -1,0 +1,301 @@
+---
+name: code-debugger
+description: Systematic debugging methodology to isolate root causes before writing code fixes. Use when symptoms are unclear, multiple systems could be involved, or you find yourself adding console.logs without understanding the problem. Prevents hours of tracing code paths when the issue is architectural, environmental, or multi-process. Triggers on: "debug this", "fix this bug", "why is X happening", "trace this issue", "figure out why", or when you catch yourself instrumenting code before understanding the system topology.
+---
+
+# Effective Troubleshooting
+
+A disciplined debugging methodology that prevents wasted hours tracing code paths when the root cause is architectural, environmental, or outside the code entirely.
+
+## The Core Discipline
+
+**Bad pattern we all fall into:**
+1. See symptom → "messages are duplicated"
+2. Jump to tracing → Add console.logs to every function
+3. Spend hours instrumenting code
+4. Realize two separate processes were both running
+5. Facepalm
+
+**The discipline:**
+1. **Clarify** - What EXACTLY is happening?
+2. **Map** - What components/systems could produce this?
+3. **Isolate** - Binary search the system to find the source
+4. **Validate** - Confirm hypothesis before touching code
+5. **Fix** - Root cause fix, not symptom patch
+
+---
+
+## Step 1: Clarify
+
+**Before touching any code, answer precisely:**
+
+### The Symptom Checklist
+- [ ] Is it the **same output** repeated, or **different outputs**?
+  - Same = likely duplicate execution
+  - Different = multiple sources or different inputs
+- [ ] Is it **always** or **intermittent**?
+  - Always = structural issue
+  - Intermittent = timing, race condition, or resource issue
+- [ ] What are the **real identifiers**?
+  - Message IDs, timestamps, process IDs, session IDs
+  - Don't trust display labels - check underlying data
+
+### Questions to Ask
+- "What would I need to see to distinguish [theory A] from [theory B]?"
+- "If I had to bet: is this one process running twice, or two processes running once?"
+- "What's the simplest explanation that doesn't require code bugs?"
+
+### Common Trap: Vague Symptoms
+"It's broken" → Get specific: "Response A appears, then 500ms later Response B appears, and Response A says 'no memory' while Response B lists the conversation history."
+
+---
+
+## Step 2: Map
+
+**Before instrumenting code, understand the system topology:**
+
+### Component Inventory
+List every component that could produce the symptom:
+```
+Discord messages could come from:
+- Discord bot/bridge daemon (launchd)
+- Discord integration in TUI (interactive pi)
+- Discord webhook from another service
+- Discord bot token used elsewhere
+- Discord client displaying cached messages twice
+```
+
+### Flow Diagram (Mental or Actual)
+```
+User → Discord → [Bot Token] → Where does this go?
+                ↓
+        [Option A: Bridge Daemon (launchd)]
+                ↓
+        [Option B: TUI Extension (session_start)]
+                ↓
+        [Option C: Both]
+```
+
+### Questions to Ask
+- "How many processes are running right now that could send Discord messages?"
+- "What events trigger this flow?" (session_start? message webhook? cron?)
+- "What config enables this component?" (env vars? settings? flags?)
+- "What's the transaction boundary?" (When does state get shared vs isolated?)
+
+### Common Trap: Code Tunnel Vision
+Don't assume "it's in this codebase." Check:
+- Environment variables
+- Running processes
+- Loaded extensions/packages
+- Network calls to external services
+- Cached/stale data
+
+---
+
+## Step 3: Isolate
+
+**Binary search the system BEFORE instrumenting code:**
+
+### Process of Elimination
+1. **Stop component A** - Does symptom persist?
+   - Yes → Component A not the source (or not sole source)
+   - No → Component A is source
+2. **Check running processes** - `ps aux | grep <pattern>`
+   - More instances than expected? Multiple services?
+3. **Check config locations** - Where is the setting? Is it duplicated?
+4. **Check event triggers** - What fires the handler? Is it firing twice?
+
+### Isolation Techniques
+
+**Component Isolation:**
+```bash
+# Stop the daemon, see if TUI alone causes issue
+launchctl stop com.example.daemon
+# Test → If symptom persists, daemon not the cause
+```
+
+**Environment Isolation:**
+```bash
+# Check if env var changes behavior
+ENV_VAR=debug ./service
+# Test → If behavior changes, config/env is factor
+```
+
+**Scope Isolation:**
+- Does it happen in production? Dev? Local?
+- Does it happen for all users? Just one?
+- Does it happen for all messages? Just DMs?
+
+### Questions to Ask
+- "If [Theory X] is true, what would happen if I disabled [Component Y]?"
+- "What is the minimal system that still shows the symptom?"
+
+### Common Trap: Isolating Symptoms, Not Causes
+Don't just mask the symptom (filter duplicates). Find WHY they're generated.
+
+---
+
+## Step 4: Validate Hypothesis
+
+**Confirm understanding before writing code:**
+
+### Validation Checklist
+- [ ] Can I predict the behavior based on my hypothesis?
+- [ ] If I'm right, what specific evidence should I see?
+- [ ] If I'm wrong, what's Plan B?
+
+### Quick Validation Tests
+- **If two processes theory:** Check `ps aux` - do you see duplicates?
+- **If stale cache theory:** Clear caches, does it fix it?
+- **If config issue:** Change config, does behavior change?
+- **If race condition:** Add delay, does timing change?
+
+### The "Explain It" Test
+Can you explain the bug to someone else in one sentence?
+> "The TUI and daemon both load the extension, so session_start fires twice, creating two bridges that both respond to Discord."
+
+If you can't explain it simply, you don't understand it yet.
+
+---
+
+## Step 5: Fix
+
+**Root cause fix, not symptom patch:**
+
+### Fix Criteria
+- [ ] Does this address WHY the symptom occurs?
+- [ ] Will this break anything else?
+- [ ] Is this the most minimal fix?
+- [ ] Can we prevent this class of issue?
+
+### Fix Categories
+
+**System/Architecture Fixes:**
+- Process isolation (TUI vs daemon awareness)
+- Configuration management (prevent duplicate loading)
+- Event deduplication (guard clauses)
+- State management (shared vs isolated state)
+
+**Code Fixes:**
+- Only after Steps 1-4 confirm the code is actually wrong
+- Prefer guards over complex logic
+- Document invariants violated
+
+### Post-Fix Verification
+```
+Before fix: Symptom present + [Root cause condition] present
+After fix:  Symptom absent  + [Root cause condition] handled
+```
+
+---
+
+## Anti-Patterns We Exhibit
+
+### ❌ The Console.log Spiral
+```
+"I need to see what's happening" → Add logs → 
+"That didn't show anything" → Add more logs → 
+"Still not clear" → Add logs everywhere → 
+Spend hours instrumenting code you don't understand yet.
+```
+
+**Instead:** Map first. Instrument only the suspected boundary.
+
+### ❌ Symptom Chasing
+```
+"Messages duplicated" → Filter duplicates → 
+"Still getting duplicates" → Filter earlier → 
+"Filter not working" → Add more filtering →
+Never ask: WHY are duplicates being generated?
+```
+
+**Instead:** Find the generation source, not the display symptom.
+
+### ❌ Assuming Single Source
+```
+"It must be in sendText()" → Trace sendText → 
+"Only called once" → Assume Discord is bugged →
+Never consider: Maybe TWO processes send messages?
+```
+
+**Instead:** Check system topology. `ps aux` is your friend.
+
+### ❌ Premature Code Reading
+```
+"Let me read the entire bridge.ts file" → 
+Spend 30 minutes understanding code that isn't the problem →
+Root cause was environment variable, not code logic.
+```
+
+**Instead:** Check configs and env vars before deep code dives.
+
+---
+
+## Quick Reference: Debugging Cheat Sheet
+
+| Symptom | First Check | Pattern |
+|---------|-------------|---------|
+| Duplicate messages | `ps aux`, message IDs | Two processes? |
+| Stale data | Timestamps, cache headers | Cache invalidation? |
+| Works locally, fails prod | Environment diff | Config drift? |
+| Intermittent | Timing, race conditions | Concurrency? |
+| Happens for user A only | User-specific state | Session/data isolation? |
+| Sudden breakage | Recent changes | What changed? |
+
+---
+
+## When to Apply This Skill
+
+**Use this skill when:**
+- Symptom description is vague ("it's broken", "duplicates happening")
+- Multiple systems could be involved (daemon + TUI + external services)
+- You catch yourself adding console.logs without a clear hypothesis
+- "It should work" but doesn't (assumption mismatch)
+- Issue is intermittent or environment-specific
+
+**Don't over-apply for:**
+- Clear stack traces with obvious null pointer
+- Single function logic errors with isolated test cases
+- Syntax errors or type mismatches the compiler caught
+
+---
+
+## Example: Today's Session (What We Did vs. Should Have Done)
+
+### What We Did
+1. Saw duplicates in Discord
+2. Added console.logs to sendText → saw one call
+3. Added console.logs to handleMessage → saw one call
+4. Added more logging everywhere → still one call
+5. Hours later: Realized TUI and daemon both load extension
+
+### What Mapping First Would Show
+1. Map: "What can send Discord messages?"
+   - Bridge daemon (launchd)
+   - TUI extension (session_start)
+2. Check: `ps aux | grep pi` → Two pi processes!
+3. Hypothesis: Both processes respond to same Discord event
+4. Isolate: Stop daemon, test TUI → symptom persists → confirmed!
+5. Fix: Guard extension to only load in RPC mode
+
+**Time saved: Hours.**
+
+---
+
+## Summary
+
+**The 30-second version:**
+1. Clarify: Same or different? Always or intermittent?
+2. Map: What components could do this? Draw the topology.
+3. Isolate: Binary search by stopping/removing components.
+4. Validate: Confirm hypothesis with minimal test.
+5. Fix: Root cause, not symptom patch.
+
+**The one-sentence rule:**
+> If you find yourself instrumenting code to "see what's happening," stop and map the system first. The bug is often outside the code.
+
+---
+
+## References
+
+- **[Pi System Boundaries](references/pi-system-boundaries.md)** — When debugging Pi-specific issues (extensions, providers, model behaviors), check this reference for known architectural limitations and provider-specific quirks.

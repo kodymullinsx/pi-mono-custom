@@ -1,0 +1,22 @@
+Running 2 tests
+Configuration not found! no-debugger
+
+----------- Case Details -----------
+[[4mWrong[0m] No [1mno-console-log[0m baseline found.
+[3mGenerated Snapshot:[0m
+  fixed: logger.info("bad")
+  labels:
+  - source: '"bad"'
+    message: Console log argument
+    style: primary
+    start: 12
+    end: 17
+[3mFor Code:[0m
+  console.log("bad")
+
+[1;41;37mFAIL[0m no-console-log  .W
+
+Error: test failed. 0 passed; 1 failed;
+Help: Test failed due to mismatching snapshots. Run with `--update-all` to update all snapshots, or `--interactive` to update selectively.
+See also: https://ast-grep.github.io/guide/test-rule.html
+

@@ -1,0 +1,36 @@
+{
+  "name": "pi-ast-grep-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "files": [
+    "index.ts",
+    "cli.ts",
+    "README.md",
+    "test"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.mjs"
+  },
+  "dependencies": {
+    "@ast-grep/napi": "^0.42.1",
+    "@sinclair/typebox": "^0.34.41"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.66.1"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.37.0"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}

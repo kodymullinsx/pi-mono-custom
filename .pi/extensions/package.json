@@ -1,0 +1,17 @@
+{
+  "name": "extensions",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:multimodal-ingress": "PI_HIDE_SUBAGENTS=1 pi --no-extensions -e ./multimodal-ingress/smoke-test.ts -p \"/run-multimodal-ingress-smoke-tests\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "diff": "^8.0.3"
+  }
+}

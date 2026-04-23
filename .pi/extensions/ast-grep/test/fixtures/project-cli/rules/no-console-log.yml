@@ -1,0 +1,14 @@
+id: no-console-log
+message: Avoid console.log
+severity: warning
+language: TypeScript
+rule:
+  pattern: console.log($ARG)
+fix: logger.info($ARG)
+labels:
+  ARG:
+    style: primary
+    message: Console log argument
+metadata:
+  category: hygiene
+  owner: pi

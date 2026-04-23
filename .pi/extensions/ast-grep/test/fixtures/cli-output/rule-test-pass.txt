@@ -1,0 +1,7 @@
+Running 2 tests
+
+----------- Case Details -----------
+[1;42;37mPASS[0m no-debugger  ..
+[1;42;37mPASS[0m no-console-log  ..
+
+test result: [32mok[0m. 2 passed; 0 failed;

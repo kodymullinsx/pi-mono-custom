@@ -1,0 +1,9 @@
+id: no-alert
+message: Avoid alert in injected JavaScript
+severity: warning
+language: JavaScript
+rule:
+  pattern: alert($MSG)
+metadata:
+  category: hygiene
+  owner: pi

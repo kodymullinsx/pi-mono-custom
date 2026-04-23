@@ -1,0 +1,37 @@
+{
+  "name": "pi-monitor-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "files": [
+    "index.ts",
+    "core.js",
+    "runner.mjs",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": ">=0.37.0",
+    "@mariozechner/pi-tui": ">=0.37.0",
+    "@sinclair/typebox": ">=0.34.0"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    },
+    "@mariozechner/pi-tui": {
+      "optional": true
+    },
+    "@sinclair/typebox": {
+      "optional": true
+    }
+  }
+}

@@ -1,0 +1,10 @@
+id: no-console-log
+snapshots:
+  console.log("bad"):
+    fixed: logger.info("bad")
+    labels:
+    - source: '"bad"'
+      message: Console log argument
+      style: primary
+      start: 12
+      end: 17

@@ -1,0 +1,9 @@
+id: no-debugger
+message: Avoid debugger
+severity: off
+language: TypeScript
+rule:
+  pattern: debugger
+metadata:
+  category: safety
+  owner: pi

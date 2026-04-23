@@ -1,0 +1,5 @@
+id: no-debugger
+valid:
+  - 'logger.info("ok")'
+invalid:
+  - 'debugger'

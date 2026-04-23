@@ -1,0 +1,17 @@
+Running 2 tests
+Configuration not found! no-debugger
+
+----------- Case Details -----------
+[Noisy] Expect no-console-log to report no issue, but some issues found in:
+
+  console.log("should have been invalid")
+
+[Missing] Expect rule no-console-log to report issues, but none found in:
+
+  logger.info("safe")
+
+FAIL no-console-log  NM
+
+Error: test failed. 0 passed; 1 failed;
+Help: You can use ast-grep playground to debug your rules and test cases.
+See also: https://ast-grep.github.io/playground.html
