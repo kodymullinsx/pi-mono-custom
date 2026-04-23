@@ -749,7 +749,7 @@ export class InteractiveMode {
 	}
 
 	private async checkForPackageUpdates(): Promise<string[]> {
-		if (process.env.PI_OFFLINE) {
+		if (process.env.PI_OFFLINE || process.env.PI_SKIP_VERSION_CHECK) {
 			return [];
 		}
 

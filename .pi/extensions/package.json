@@ -28,8 +28,7 @@
       "./questionnaire",
       "./redraws.ts",
       "./review",
-      "./todos",
-      "./tps.ts"
+      "./todos"
     ]
   },
   "scripts": {
