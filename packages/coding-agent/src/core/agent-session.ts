@@ -646,13 +646,13 @@ export class AgentSession {
 			return;
 		}
 
-		const lastAssistant = this._findLastAssistantInMessages(event.messages);
-		if (!lastAssistant) {
+		const terminalAssistant = this._getTerminalAssistantForAgentEnd(event);
+		if (!terminalAssistant) {
 			return;
 		}
 
-		const hasAttachmentRetry = this._getAttachmentRetryTargets(lastAssistant.errorMessage).size > 0;
-		if (!hasAttachmentRetry && !this._isRetryableError(lastAssistant)) {
+		const hasAttachmentRetry = this._getAttachmentRetryTargets(terminalAssistant).size > 0;
+		if (!hasAttachmentRetry && !this._isRetryableError(terminalAssistant)) {
 			return;
 		}
 
@@ -669,6 +669,15 @@ export class AgentSession {
 			}
 		}
 		return undefined;
+	}
+
+	private _getTerminalAssistantForAgentEnd(
+		event: Extract<AgentEvent, { type: "agent_end" }>,
+	): AssistantMessage | undefined {
+		if (this._lastAssistantMessage) {
+			return this._lastAssistantMessage;
+		}
+		return this._findLastAssistantInMessages(event.messages);
 	}
 
 	private async _processAgentEvent(event: AgentEvent): Promise<void> {
@@ -744,9 +753,15 @@ export class AgentSession {
 		}
 
 		// Check auto-retry and auto-compaction after agent completes
-		if (event.type === "agent_end" && this._lastAssistantMessage) {
-			const msg = this._lastAssistantMessage;
+		if (event.type === "agent_end") {
+			const terminalAssistant = this._getTerminalAssistantForAgentEnd(event);
 			this._lastAssistantMessage = undefined;
+			if (!terminalAssistant) {
+				this._resolveRetry();
+				return;
+			}
+
+			const msg = terminalAssistant;
 
 			const didStripRetry = await this._handleAttachmentStripRetry(msg);
 			if (didStripRetry) return;
@@ -2605,36 +2620,14 @@ export class AgentSession {
 		);
 	}
 
-	private _getAttachmentRetryTargets(errorMessage: string | undefined): Set<AttachmentRetryTarget> {
+	private _getAttachmentRetryTargets(message: AssistantMessage | undefined): Set<AttachmentRetryTarget> {
 		const targets = new Set<AttachmentRetryTarget>();
-		if (!errorMessage) return targets;
+		const retryTargets = message?.errorMetadata?.local ? message.errorMetadata.attachmentRetryTargets : undefined;
+		if (!retryTargets) return targets;
 
-		const isOversizeError =
-			/payload too large|request too large|input too large|too many bytes|media too large/i.test(errorMessage);
-		const isAttachmentRejection =
-			/unsupported|not support|does not support|cannot accept|can't accept|invalid|not allowed|rejected|failed to decode|unable to process|too large|exceeds|must be|only supports?/i.test(
-				errorMessage,
-			);
-		const mentionsDocument = /application\/pdf|pdf|document(?:\s+block)?|attachment|file upload/i.test(errorMessage);
-		const mentionsImage = /image|vision|png|jpe?g|webp|gif/i.test(errorMessage);
-
-		if (isOversizeError) {
-			if (mentionsDocument || !mentionsImage) {
-				targets.add("document");
-			}
-			if (mentionsImage || !mentionsDocument) {
-				targets.add("image");
-			}
-			return targets;
+		for (const target of retryTargets) {
+			targets.add(target as AttachmentRetryTarget);
 		}
-
-		if (isAttachmentRejection && mentionsDocument) {
-			targets.add("document");
-		}
-		if (isAttachmentRejection && mentionsImage) {
-			targets.add("image");
-		}
-
 		return targets;
 	}
 
@@ -2741,7 +2734,7 @@ export class AgentSession {
 			return false;
 		}
 
-		const targets = this._getAttachmentRetryTargets(message.errorMessage);
+		const targets = this._getAttachmentRetryTargets(message);
 		if (targets.size === 0) {
 			return false;
 		}
@@ -2763,6 +2756,7 @@ export class AgentSession {
 		const stripResult = this._stripLatestAttachmentMessage(targets);
 		if (!stripResult) {
 			this._retryAttempt--;
+			this._resolveRetry();
 			return false;
 		}
 

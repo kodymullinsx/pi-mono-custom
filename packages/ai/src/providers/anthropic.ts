@@ -13,7 +13,6 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
-	DocumentContent,
 	Message,
 	Model,
 	PromptContentBlock,
@@ -27,6 +26,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
+import { canInlineDocument, formatDocumentSummary } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
@@ -107,15 +107,6 @@ const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 /**
  * Convert content blocks to Anthropic API format
  */
-function formatDocumentSummary(block: DocumentContent): string {
-	const name = block.fileName ?? "document";
-	return `[document attached: ${name} (${block.mimeType})]`;
-}
-
-function canInlineDocument(block: DocumentContent): boolean {
-	return block.mimeType === "application/pdf";
-}
-
 function convertContentBlocks(content: PromptContentBlock[]):
 	| string
 	| Array<

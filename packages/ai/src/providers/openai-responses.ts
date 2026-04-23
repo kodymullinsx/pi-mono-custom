@@ -13,6 +13,7 @@ import type {
 	StreamOptions,
 	Usage,
 } from "../types.js";
+import { getAssistantErrorMetadata } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -126,6 +127,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

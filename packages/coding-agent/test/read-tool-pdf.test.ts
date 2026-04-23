@@ -5,28 +5,17 @@ import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.js";
 
-vi.mock("../src/utils/image-resize.js", () => ({
-	resizeImage: vi.fn(),
-	formatDimensionNote: vi.fn(() => undefined),
-}));
-
-vi.mock("../src/utils/pdf-cache.js", () => ({
-	getPDFCacheEntry: vi.fn(),
-}));
-
 vi.mock("../src/utils/pdf.js", () => ({
-	extractPDFPages: vi.fn(),
 	getPDFPageCount: vi.fn(),
 	parsePDFPageRange: vi.fn(),
 	PDF_AT_MENTION_INLINE_THRESHOLD: 10,
 	PDF_MAX_PAGES_PER_READ: 20,
 	readPDF: vi.fn(),
+	renderPdfPagesToImageBlocks: vi.fn(),
 }));
 
 import { createReadToolDefinition } from "../src/core/tools/read.js";
-import { resizeImage } from "../src/utils/image-resize.js";
-import { extractPDFPages, getPDFPageCount, parsePDFPageRange, readPDF } from "../src/utils/pdf.js";
-import { getPDFCacheEntry } from "../src/utils/pdf-cache.js";
+import { getPDFPageCount, parsePDFPageRange, readPDF, renderPdfPagesToImageBlocks } from "../src/utils/pdf.js";
 
 function createModel(input: Model<any>["input"]): Model<any> {
 	return {
@@ -65,36 +54,21 @@ function createExtensionContext(model?: Model<any>): ExtensionContext {
 describe("read tool PDF support", () => {
 	let testDir: string;
 	let pdfPath: string;
-	let renderedPagesDir: string;
 
 	beforeEach(() => {
 		testDir = join(tmpdir(), `pi-read-pdf-${Date.now()}`);
-		renderedPagesDir = join(testDir, "rendered-pages");
-		mkdirSync(renderedPagesDir, { recursive: true });
+		mkdirSync(testDir, { recursive: true });
 
 		pdfPath = join(testDir, "sample.pdf");
 		writeFileSync(pdfPath, "%PDF-1.4\nfake pdf body");
 
 		vi.mocked(getPDFPageCount).mockResolvedValue(12);
-		vi.mocked(getPDFCacheEntry).mockResolvedValue({
-			outputDir: renderedPagesDir,
-			imagePaths: [],
-		});
 		vi.mocked(parsePDFPageRange).mockImplementation((pages: string) => {
 			if (pages === "2-3") {
 				return { firstPage: 2, lastPage: 3 };
 			}
 			return null;
 		});
-		vi.mocked(resizeImage).mockImplementation(async ({ data, mimeType }) => ({
-			data: `resized-${data}`,
-			mimeType,
-			originalWidth: 100,
-			originalHeight: 100,
-			width: 100,
-			height: 100,
-			wasResized: false,
-		}));
 	});
 
 	afterEach(() => {
@@ -146,30 +120,22 @@ describe("read tool PDF support", () => {
 				pageCount: 12,
 			},
 		});
-		expect(extractPDFPages).not.toHaveBeenCalled();
+		expect(renderPdfPagesToImageBlocks).not.toHaveBeenCalled();
 	});
 
 	it("renders requested PDF page ranges as image attachments", async () => {
-		const pageOne = join(renderedPagesDir, "page-1.jpg");
-		const pageTwo = join(renderedPagesDir, "page-2.jpg");
-		writeFileSync(pageOne, "page-1");
-		writeFileSync(pageTwo, "page-2");
-
-		vi.mocked(extractPDFPages).mockResolvedValue({
-			success: true,
-			data: {
-				type: "parts",
-				file: {
-					filePath: pdfPath,
-					originalSize: 1234,
-					count: 2,
-					outputDir: renderedPagesDir,
-					imagePaths: [pageOne, pageTwo],
-					firstPage: 2,
-					lastPage: 3,
-				},
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue([
+			{
+				type: "image",
+				mimeType: "image/jpeg",
+				data: "resized-cGFnZS0x",
 			},
-		});
+			{
+				type: "image",
+				mimeType: "image/jpeg",
+				data: "resized-cGFnZS0y",
+			},
+		]);
 
 		const tool = createReadToolDefinition(testDir);
 		const result = await tool.execute(

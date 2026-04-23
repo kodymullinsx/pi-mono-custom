@@ -212,6 +212,65 @@ function generateId(byId: { has(id: string): boolean }): string {
 	return randomUUID();
 }
 
+function buildPersistedAttachmentPlaceholder(
+	block: Extract<PromptContentBlock, { type: "image" | "document" }>,
+): TextContent {
+	if (block.type === "image") {
+		return {
+			type: "text",
+			text: `[image binary omitted from persisted session (${block.mimeType})]`,
+		};
+	}
+
+	const name = block.fileName ?? "document";
+	return {
+		type: "text",
+		text: `[document binary omitted from persisted session: ${name} (${block.mimeType})]`,
+	};
+}
+
+function sanitizePromptContentForPersistence(content: PromptContentBlock[]): PromptContentBlock[] {
+	let changed = false;
+	const sanitized = content.map((block) => {
+		if (block.type === "image" || block.type === "document") {
+			changed = true;
+			return buildPersistedAttachmentPlaceholder(block);
+		}
+		return block;
+	});
+	return changed ? sanitized : content;
+}
+
+function sanitizeMessageForPersistence(message: AgentMessage): AgentMessage {
+	if (
+		(message.role !== "user" && message.role !== "toolResult" && message.role !== "custom") ||
+		typeof message.content === "string"
+	) {
+		return message;
+	}
+
+	const sanitizedContent = sanitizePromptContentForPersistence(message.content);
+	return sanitizedContent === message.content ? message : { ...message, content: sanitizedContent };
+}
+
+function serializeFileEntryForPersistence(entry: FileEntry): string {
+	if (entry.type === "session") {
+		return JSON.stringify(entry);
+	}
+
+	if (entry.type === "message") {
+		const sanitizedMessage = sanitizeMessageForPersistence(entry.message);
+		return JSON.stringify(sanitizedMessage === entry.message ? entry : { ...entry, message: sanitizedMessage });
+	}
+
+	if (entry.type === "custom_message" && typeof entry.content !== "string") {
+		const sanitizedContent = sanitizePromptContentForPersistence(entry.content);
+		return JSON.stringify(sanitizedContent === entry.content ? entry : { ...entry, content: sanitizedContent });
+	}
+
+	return JSON.stringify(entry);
+}
+
 /** Migrate v1 → v2: add id/parentId tree structure. Mutates in place. */
 function migrateV1ToV2(entries: FileEntry[]): void {
 	const ids = new Set<string>();
@@ -774,7 +833,7 @@ export class SessionManager {
 
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const content = `${this.fileEntries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+		const content = `${this.fileEntries.map((e) => serializeFileEntryForPersistence(e)).join("\n")}\n`;
 		writeFileSync(this.sessionFile, content);
 	}
 
@@ -810,11 +869,11 @@ export class SessionManager {
 
 		if (!this.flushed) {
 			for (const e of this.fileEntries) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(e)}\n`);
+				appendFileSync(this.sessionFile, `${serializeFileEntryForPersistence(e)}\n`);
 			}
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			appendFileSync(this.sessionFile, `${serializeFileEntryForPersistence(entry)}\n`);
 		}
 	}
 

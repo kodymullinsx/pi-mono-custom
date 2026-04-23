@@ -31,6 +31,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
+import { getAssistantErrorMetadata, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -76,13 +77,6 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 
 function isDocumentContentBlock(block: { type: string }): block is DocumentContent {
 	return block.type === "document";
-}
-
-function throwUnsupportedDocumentSerialization(block: DocumentContent, location: string): never {
-	const name = block.fileName ?? "document";
-	throw new Error(
-		`This OpenAI-compatible ${location} cannot accept first-class documents yet (${name}, ${block.mimeType}). Convert the file to PDF pages/images or extracted text before sending it to this model.`,
-	);
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
@@ -366,6 +360,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;

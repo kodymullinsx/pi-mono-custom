@@ -163,7 +163,7 @@ describe("AgentSession retry and event characterization", () => {
 		).toBe(true);
 	});
 
-	it("records attachment mutation details when retry strips a rejected user attachment", async () => {
+	it("does not strip attachments for provider-supplied rejection text even when retry is enabled", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } } });
 		harnesses.push(harness);
 		harness.setResponses([
@@ -185,10 +185,8 @@ describe("AgentSession retry and event characterization", () => {
 			],
 		});
 
-		expect(harness.faux.state.callCount).toBe(2);
-		expect(harness.eventsOfType("auto_retry_start").map((event) => event.errorMessage)).toEqual([
-			"Unsupported document attachment in request [auto-retry removed document attachments from the latest user attachment message]",
-		]);
+		expect(harness.faux.state.callCount).toBe(1);
+		expect(harness.eventsOfType("auto_retry_start")).toEqual([]);
 		const user = harness.session.messages.find((message) => message.role === "user");
 		expect(user?.role).toBe("user");
 		expect(typeof user?.content).not.toBe("string");
@@ -196,7 +194,7 @@ describe("AgentSession retry and event characterization", () => {
 			user?.role === "user" && typeof user.content !== "string"
 				? user.content.some((part) => part.type === "document")
 				: false,
-		).toBe(false);
+		).toBe(true);
 	});
 
 	it("does not retry non-retryable errors", async () => {

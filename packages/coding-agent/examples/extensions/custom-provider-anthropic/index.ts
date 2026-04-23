@@ -30,7 +30,6 @@ import {
 	type Context,
 	calculateCost,
 	createAssistantMessageEventStream,
-	type DocumentContent,
 	type Message,
 	type Model,
 	type OAuthCredentials,
@@ -45,6 +44,7 @@ import {
 	type ToolResultMessage,
 } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { formatDocumentSummary } from "../../../../ai/src/utils/document-utils.js";
 
 // =============================================================================
 // OAuth Implementation (copied from packages/ai/src/utils/oauth/anthropic.ts)
@@ -184,11 +184,6 @@ function isOAuthToken(apiKey: string): boolean {
 
 function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
-}
-
-function formatDocumentSummary(block: DocumentContent): string {
-	const name = block.fileName ?? "document";
-	return `[document attached: ${name} (${block.mimeType})]`;
 }
 
 function convertContentBlocks(

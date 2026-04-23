@@ -7,32 +7,14 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 const pdfMocks = vi.hoisted(() => ({
 	getPDFPageCount: vi.fn(),
 	readPDF: vi.fn(),
-	extractPDFPages: vi.fn(),
-}));
-
-const pdfCacheMocks = vi.hoisted(() => ({
-	getPDFCacheEntry: vi.fn(),
-}));
-
-const imageResizeMocks = vi.hoisted(() => ({
-	resizeImage: vi.fn(),
-	formatDimensionNote: vi.fn(() => undefined),
+	renderPdfPagesToImageBlocks: vi.fn(),
 }));
 
 vi.mock("../src/utils/pdf.js", () => ({
 	PDF_AT_MENTION_INLINE_THRESHOLD: 10,
 	getPDFPageCount: pdfMocks.getPDFPageCount,
 	readPDF: pdfMocks.readPDF,
-	extractPDFPages: pdfMocks.extractPDFPages,
-}));
-
-vi.mock("../src/utils/pdf-cache.js", () => ({
-	getPDFCacheEntry: pdfCacheMocks.getPDFCacheEntry,
-}));
-
-vi.mock("../src/utils/image-resize.js", () => ({
-	resizeImage: imageResizeMocks.resizeImage,
-	formatDimensionNote: imageResizeMocks.formatDimensionNote,
+	renderPdfPagesToImageBlocks: pdfMocks.renderPdfPagesToImageBlocks,
 }));
 
 import { processFileArguments } from "../src/cli/file-processor.js";
@@ -61,25 +43,16 @@ describe("processFileArguments PDF handling", () => {
 
 	test("renders small PDFs to image attachments for image-capable models without document input", async () => {
 		const pdfPath = join(tempRoot, "small.pdf");
-		const renderedPagePath = join(tempRoot, "page-1.jpg");
 		writeFileSync(pdfPath, "%PDF-1.7");
-		writeFileSync(renderedPagePath, "jpeg-data");
 
 		pdfMocks.getPDFPageCount.mockResolvedValue(1);
-		pdfCacheMocks.getPDFCacheEntry.mockResolvedValue({
-			outputDir: tempRoot,
-			imagePaths: [renderedPagePath],
-		});
-		imageResizeMocks.resizeImage.mockResolvedValue({
-			type: "image",
-			data: Buffer.from("resized-image").toString("base64"),
-			mimeType: "image/jpeg",
-			originalWidth: 100,
-			originalHeight: 100,
-			width: 100,
-			height: 100,
-			wasResized: false,
-		});
+		pdfMocks.renderPdfPagesToImageBlocks.mockResolvedValue([
+			{
+				type: "image",
+				data: Buffer.from("resized-image").toString("base64"),
+				mimeType: "image/jpeg",
+			},
+		]);
 
 		const result = await processFileArguments([pdfPath], {
 			autoResizeImages: true,
@@ -141,7 +114,7 @@ describe("processFileArguments PDF handling", () => {
 		expect(result.attachments).toEqual([]);
 		expect(result.text).toContain("[PDF referenced only: large.pdf has 18 page(s).");
 		expect(result.text).toContain('pages="1-5"');
-		expect(pdfCacheMocks.getPDFCacheEntry).not.toHaveBeenCalled();
+		expect(pdfMocks.renderPdfPagesToImageBlocks).not.toHaveBeenCalled();
 		expect(pdfMocks.readPDF).not.toHaveBeenCalled();
 	});
 
@@ -176,34 +149,25 @@ describe("processFileArguments PDF handling", () => {
 			},
 		]);
 		expect(result.text).toContain("[PDF attached: large-native.pdf, 18 page(s)]");
-		expect(pdfCacheMocks.getPDFCacheEntry).not.toHaveBeenCalled();
+		expect(pdfMocks.renderPdfPagesToImageBlocks).not.toHaveBeenCalled();
 	});
 
 	test("preserves native PDF attachment failures when falling back to images", async () => {
 		const pdfPath = join(tempRoot, "fallback.pdf");
-		const renderedPagePath = join(tempRoot, "fallback-page-1.jpg");
 		writeFileSync(pdfPath, "%PDF-1.7");
-		writeFileSync(renderedPagePath, "jpeg-data");
 
 		pdfMocks.getPDFPageCount.mockResolvedValue(1);
 		pdfMocks.readPDF.mockResolvedValue({
 			success: false,
 			error: { message: "Corrupted PDF", category: "corrupted" },
 		});
-		pdfCacheMocks.getPDFCacheEntry.mockResolvedValue({
-			outputDir: tempRoot,
-			imagePaths: [renderedPagePath],
-		});
-		imageResizeMocks.resizeImage.mockResolvedValue({
-			type: "image",
-			data: Buffer.from("fallback-image").toString("base64"),
-			mimeType: "image/jpeg",
-			originalWidth: 100,
-			originalHeight: 100,
-			width: 100,
-			height: 100,
-			wasResized: false,
-		});
+		pdfMocks.renderPdfPagesToImageBlocks.mockResolvedValue([
+			{
+				type: "image",
+				data: Buffer.from("fallback-image").toString("base64"),
+				mimeType: "image/jpeg",
+			},
+		]);
 
 		const result = await processFileArguments([pdfPath], {
 			autoResizeImages: true,

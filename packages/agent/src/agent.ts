@@ -1,4 +1,5 @@
 import {
+	type AssistantErrorMetadata,
 	type AttachmentContent,
 	type Message,
 	type Model,
@@ -461,6 +462,10 @@ export class Agent {
 	}
 
 	private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
+		const errorMetadata =
+			typeof error === "object" && error !== null && "errorMetadata" in error
+				? ((error as { errorMetadata?: AssistantErrorMetadata }).errorMetadata ?? undefined)
+				: undefined;
 		const failureMessage = {
 			role: "assistant",
 			content: [{ type: "text", text: "" }],
@@ -470,6 +475,7 @@ export class Agent {
 			usage: EMPTY_USAGE,
 			stopReason: aborted ? "aborted" : "error",
 			errorMessage: error instanceof Error ? error.message : String(error),
+			errorMetadata,
 			timestamp: Date.now(),
 		} satisfies AgentMessage;
 		this._state.messages.push(failureMessage);

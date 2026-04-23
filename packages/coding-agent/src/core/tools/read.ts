@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Api, DocumentContent, ImageContent, Model, PromptContentBlock } from "@mariozechner/pi-ai";
+import type { Api, DocumentContent, Model, PromptContentBlock } from "@mariozechner/pi-ai";
 import { Text } from "@mariozechner/pi-tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, stat as fsStat } from "fs/promises";
@@ -10,14 +10,13 @@ import { getLanguageFromPath, highlightCode } from "../../modes/interactive/them
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import {
-	extractPDFPages,
 	getPDFPageCount,
 	PDF_AT_MENTION_INLINE_THRESHOLD,
 	PDF_MAX_PAGES_PER_READ,
 	parsePDFPageRange,
 	readPDF,
+	renderPdfPagesToImageBlocks,
 } from "../../utils/pdf.js";
-import { getPDFCacheEntry } from "../../utils/pdf-cache.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
@@ -113,6 +112,10 @@ function getRequestedPageCount(range: { firstPage: number; lastPage: number }): 
 	return range.lastPage - range.firstPage + 1;
 }
 
+function buildPdfHeaderNote(pageCount: number | null | undefined): string {
+	return `Read PDF file [application/pdf]${pageCount ? ` (${pageCount} page(s))` : ""}`;
+}
+
 function formatReadResult(
 	args: { path?: string; file_path?: string; offset?: number; limit?: number } | undefined,
 	result: { content: PromptContentBlock[]; details?: ReadToolDetails },
@@ -206,7 +209,10 @@ export function createReadToolDefinition(
 									}
 								}
 
-								const pageCount = await getPDFPageCount(absolutePath, signal);
+								const [pageCount, fileStats] = await Promise.all([
+									getPDFPageCount(absolutePath, signal),
+									fsStat(absolutePath),
+								]);
 								const supportsDocuments = ctx?.model?.input.includes("document") ?? false;
 								if (!pageRange && !supportsDocuments && pageCount === null) {
 									throw new Error(
@@ -240,11 +246,11 @@ export function createReadToolDefinition(
 									: undefined;
 
 								if (!effectiveRange && supportsDocuments) {
-									const pdfResult = await readPDF(absolutePath);
+									const pdfResult = await readPDF(absolutePath, { pageCount });
 									if (!pdfResult.success) {
 										throw new Error(pdfResult.error.message);
 									}
-									const pdfNote = `Read PDF file [application/pdf]${pageCount ? ` (${pageCount} page(s))` : ""}`;
+									const pdfNote = buildPdfHeaderNote(pageCount);
 									content = [
 										{ type: "text", text: pdfNote },
 										{
@@ -256,53 +262,13 @@ export function createReadToolDefinition(
 									];
 									details = { pdf: { pageCount: pageCount ?? undefined } };
 								} else {
-									const fileStats = await fsStat(absolutePath);
-									const cacheEntry = await getPDFCacheEntry(absolutePath, fileStats.mtimeMs, effectiveRange);
-									let imagePaths = cacheEntry.imagePaths;
-									if (imagePaths.length === 0) {
-										const extractResult = await extractPDFPages(absolutePath, {
-											firstPage: effectiveRange?.firstPage,
-											lastPage:
-												effectiveRange?.lastPage && Number.isFinite(effectiveRange.lastPage)
-													? effectiveRange.lastPage
-													: undefined,
-											outputDir: cacheEntry.outputDir,
-											signal,
-										});
-										if (!extractResult.success) {
-											throw new Error(extractResult.error.message);
-										}
-										imagePaths = extractResult.data.file.imagePaths;
-									}
-
-									const imageBlocks = (
-										await Promise.all(
-											imagePaths.map(async (imagePath) => {
-												const buffer = await fsReadFile(imagePath);
-												const base64 = buffer.toString("base64");
-												if (!autoResizeImages) {
-													return {
-														type: "image" as const,
-														mimeType: "image/jpeg",
-														data: base64,
-													};
-												}
-												const resized = await resizeImage({
-													type: "image",
-													data: base64,
-													mimeType: "image/jpeg",
-												});
-												if (!resized) {
-													return null;
-												}
-												return {
-													type: "image" as const,
-													mimeType: resized.mimeType,
-													data: resized.data,
-												};
-											}),
-										)
-									).filter((block): block is ImageContent => block !== null);
+									const imageBlocks = await renderPdfPagesToImageBlocks(absolutePath, {
+										firstPage: effectiveRange?.firstPage,
+										lastPage: effectiveRange?.lastPage,
+										autoResize: autoResizeImages,
+										signal,
+										mtimeMs: fileStats.mtimeMs,
+									});
 
 									const renderedPageCount = imageBlocks.length;
 									const firstPage = effectiveRange?.firstPage ?? 1;
@@ -312,7 +278,7 @@ export function createReadToolDefinition(
 											: firstPage + renderedPageCount - 1;
 									let pdfNote = effectiveRange
 										? `Read PDF pages ${firstPage}-${lastPage}`
-										: `Read PDF file [application/pdf]${pageCount ? ` (${pageCount} page(s))` : ""}`;
+										: buildPdfHeaderNote(pageCount);
 									if (renderedPageCount === 0) {
 										pdfNote +=
 											"\n[PDF pages omitted: could not be resized below the inline image size limit.]";

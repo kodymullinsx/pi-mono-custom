@@ -22,6 +22,7 @@ import type {
 	AttachmentContent,
 	Context,
 	Model,
+	ModelInput,
 	OAuthCredentials,
 	OAuthLoginCallbacks,
 	PromptContentBlock,
@@ -1336,7 +1337,7 @@ export interface ProviderModelConfig {
 	/** Whether the model supports extended thinking. */
 	reasoning: boolean;
 	/** Supported input types. */
-	input: ("text" | "image" | "document")[];
+	input: ModelInput[];
 	/** Cost per token (for tracking, can be 0). */
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	/** Maximum context window size in tokens. */

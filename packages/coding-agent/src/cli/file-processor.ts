@@ -9,8 +9,12 @@ import { basename, extname, resolve } from "path";
 import { resolveReadPath } from "../core/tools/path-utils.js";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.js";
-import { extractPDFPages, getPDFPageCount, PDF_AT_MENTION_INLINE_THRESHOLD, readPDF } from "../utils/pdf.js";
-import { getPDFCacheEntry } from "../utils/pdf-cache.js";
+import {
+	getPDFPageCount,
+	PDF_AT_MENTION_INLINE_THRESHOLD,
+	readPDF,
+	renderPdfPagesToImageBlocks,
+} from "../utils/pdf.js";
 
 export interface ProcessedFiles {
 	text: string;
@@ -61,69 +65,16 @@ function buildPdfFallbackReason(baseReason: string, nativeAttachmentFailure?: st
 	return `${baseReason} First-class PDF attachment failed: ${nativeAttachmentFailure}.`;
 }
 
-async function renderPdfToImageAttachments(
-	absolutePath: string,
-	autoResizeImages: boolean,
-	pageCount: number,
-): Promise<ImageContent[]> {
-	const fileStats = await stat(absolutePath);
-	const cacheEntry = await getPDFCacheEntry(absolutePath, fileStats.mtimeMs, { firstPage: 1, lastPage: pageCount });
-
-	let imagePaths = cacheEntry.imagePaths;
-	if (imagePaths.length === 0) {
-		const extractResult = await extractPDFPages(absolutePath, {
-			firstPage: 1,
-			lastPage: pageCount,
-			outputDir: cacheEntry.outputDir,
-		});
-		if (!extractResult.success) {
-			throw new Error(extractResult.error.message);
-		}
-		imagePaths = extractResult.data.file.imagePaths;
-	}
-
-	const attachments = (
-		await Promise.all(
-			imagePaths.map(async (imagePath) => {
-				const base64Image = (await readFile(imagePath)).toString("base64");
-				if (!autoResizeImages) {
-					return {
-						type: "image" as const,
-						mimeType: "image/jpeg",
-						data: base64Image,
-					};
-				}
-
-				const resized = await resizeImage({
-					type: "image",
-					data: base64Image,
-					mimeType: "image/jpeg",
-				});
-				if (!resized) {
-					return null;
-				}
-				return {
-					type: "image" as const,
-					mimeType: resized.mimeType,
-					data: resized.data,
-				};
-			}),
-		)
-	).filter((attachment): attachment is ImageContent => attachment !== null);
-
-	return attachments;
-}
-
 async function processPdfFile(
 	absolutePath: string,
-	options: { autoResizeImages: boolean; model?: Model<Api> },
+	options: { autoResizeImages: boolean; model?: Model<Api>; mtimeMs?: number },
 ): Promise<ProcessedFiles> {
 	const pageCount = await getPDFPageCount(absolutePath);
 	const supportsDocuments = supportsInlineDocumentAttachment(options.model, "application/pdf");
 	let nativeAttachmentFailure: string | undefined;
 
 	if (supportsDocuments) {
-		const pdfResult = await readPDF(absolutePath);
+		const pdfResult = await readPDF(absolutePath, { pageCount });
 		if (pdfResult.success) {
 			return {
 				text: `<file name="${absolutePath}">[PDF attached: ${basename(absolutePath)}${pageCount ? `, ${pageCount} page(s)` : ""}]</file>\n`,
@@ -182,7 +133,12 @@ async function processPdfFile(
 		};
 	}
 
-	const attachments = await renderPdfToImageAttachments(absolutePath, options.autoResizeImages, pageCount);
+	const attachments = await renderPdfPagesToImageBlocks(absolutePath, {
+		firstPage: 1,
+		lastPage: pageCount,
+		autoResize: options.autoResizeImages,
+		mtimeMs: options.mtimeMs,
+	});
 	if (attachments.length === 0) {
 		return {
 			text: `<file name="${absolutePath}">[${buildPdfFallbackReason(
@@ -274,6 +230,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 				const processedPdf = await processPdfFile(absolutePath, {
 					autoResizeImages,
 					model: options?.model,
+					mtimeMs: stats.mtimeMs,
 				});
 				text += processedPdf.text;
 				attachments.push(...processedPdf.attachments);

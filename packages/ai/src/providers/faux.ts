@@ -17,6 +17,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types.js";
+import { getAssistantErrorMetadata } from "../utils/document-utils.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 
 const DEFAULT_API = "faux";
@@ -282,6 +283,7 @@ function createErrorMessage(error: unknown, api: string, provider: string, model
 		usage: DEFAULT_USAGE,
 		stopReason: "error",
 		errorMessage: error instanceof Error ? error.message : String(error),
+		errorMetadata: getAssistantErrorMetadata(error),
 		timestamp: Date.now(),
 	};
 }

@@ -10,6 +10,7 @@ import {
 	getProviders,
 	type KnownProvider,
 	type Model,
+	type ModelInput,
 	type OAuthProviderInterface,
 	type OpenAICompletionsCompat,
 	type OpenAIResponsesCompat,
@@ -218,7 +219,7 @@ function augmentBuiltInModelCapabilities(model: Model<Api>): Model<Api> {
 
 	return {
 		...model,
-		input: [...model.input, "document"] as ("text" | "image" | "document")[],
+		input: [...model.input, "document"] as ModelInput[],
 	};
 }
 
@@ -300,7 +301,7 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 	// Simple field overrides
 	if (override.name !== undefined) result.name = override.name;
 	if (override.reasoning !== undefined) result.reasoning = override.reasoning;
-	if (override.input !== undefined) result.input = override.input as ("text" | "image" | "document")[];
+	if (override.input !== undefined) result.input = override.input as ModelInput[];
 	if (override.contextWindow !== undefined) result.contextWindow = override.contextWindow;
 	if (override.maxTokens !== undefined) result.maxTokens = override.maxTokens;
 
@@ -593,7 +594,7 @@ export class ModelRegistry {
 					provider: providerName,
 					baseUrl,
 					reasoning: modelDef.reasoning ?? false,
-					input: (modelDef.input ?? ["text"]) as ("text" | "image" | "document")[],
+					input: (modelDef.input ?? ["text"]) as ModelInput[],
 					cost: modelDef.cost ?? defaultCost,
 					contextWindow: modelDef.contextWindow ?? 128000,
 					maxTokens: modelDef.maxTokens ?? 16384,
@@ -829,7 +830,7 @@ export class ModelRegistry {
 					provider: providerName,
 					baseUrl: config.baseUrl!,
 					reasoning: modelDef.reasoning,
-					input: modelDef.input as ("text" | "image" | "document")[],
+					input: modelDef.input as ModelInput[],
 					cost: modelDef.cost,
 					contextWindow: modelDef.contextWindow,
 					maxTokens: modelDef.maxTokens,
@@ -876,7 +877,7 @@ export interface ProviderConfigInput {
 		api?: Api;
 		baseUrl?: string;
 		reasoning: boolean;
-		input: ("text" | "image" | "document")[];
+		input: ModelInput[];
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow: number;
 		maxTokens: number;

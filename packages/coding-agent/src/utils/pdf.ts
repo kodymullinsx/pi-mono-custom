@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import { execCommand } from "../core/exec.js";
+import { resizeImage } from "./image-resize.js";
+import { getPDFCacheEntry } from "./pdf-cache.js";
 
 export const PDF_TARGET_RAW_SIZE = 20 * 1024 * 1024;
 export const PDF_EXTRACT_SIZE_THRESHOLD = 3 * 1024 * 1024;
@@ -129,7 +132,12 @@ export async function getPDFPageCount(filePath: string, signal?: AbortSignal): P
 	return Number.isNaN(count) ? null : count;
 }
 
-export async function readPDF(filePath: string): Promise<PDFResult<PDFReadData>> {
+export async function readPDF(
+	filePath: string,
+	options?: {
+		pageCount?: number | null;
+	},
+): Promise<PDFResult<PDFReadData>> {
 	try {
 		const fileStats = await stat(filePath);
 		if (fileStats.size === 0) {
@@ -169,7 +177,7 @@ export async function readPDF(filePath: string): Promise<PDFResult<PDFReadData>>
 					filePath,
 					base64: fileBuffer.toString("base64"),
 					originalSize: fileStats.size,
-					pageCount: await getPDFPageCount(filePath),
+					pageCount: options?.pageCount ?? (await getPDFPageCount(filePath)),
 				},
 			},
 		};
@@ -182,6 +190,68 @@ export async function readPDF(filePath: string): Promise<PDFResult<PDFReadData>>
 			},
 		};
 	}
+}
+
+export async function renderPdfPagesToImageBlocks(
+	filePath: string,
+	options?: {
+		firstPage?: number;
+		lastPage?: number;
+		autoResize?: boolean;
+		signal?: AbortSignal;
+		mtimeMs?: number;
+	},
+): Promise<ImageContent[]> {
+	const autoResize = options?.autoResize ?? true;
+	const mtimeMs = options?.mtimeMs ?? (await stat(filePath)).mtimeMs;
+	const lastPage = options?.lastPage;
+	const cacheEntry = await getPDFCacheEntry(filePath, mtimeMs, {
+		firstPage: options?.firstPage,
+		lastPage: lastPage !== undefined && Number.isFinite(lastPage) ? lastPage : undefined,
+	});
+
+	let imagePaths = cacheEntry.imagePaths;
+	if (imagePaths.length === 0) {
+		const extractResult = await extractPDFPages(filePath, {
+			firstPage: options?.firstPage,
+			lastPage: lastPage !== undefined && Number.isFinite(lastPage) ? lastPage : undefined,
+			outputDir: cacheEntry.outputDir,
+			signal: options?.signal,
+		});
+		if (!extractResult.success) {
+			throw new Error(extractResult.error.message);
+		}
+		imagePaths = extractResult.data.file.imagePaths;
+	}
+
+	return (
+		await Promise.all(
+			imagePaths.map(async (imagePath) => {
+				const base64Image = (await readFile(imagePath)).toString("base64");
+				if (!autoResize) {
+					return {
+						type: "image" as const,
+						mimeType: "image/jpeg",
+						data: base64Image,
+					};
+				}
+
+				const resized = await resizeImage({
+					type: "image",
+					data: base64Image,
+					mimeType: "image/jpeg",
+				});
+				if (!resized) {
+					return null;
+				}
+				return {
+					type: "image" as const,
+					mimeType: resized.mimeType,
+					data: resized.data,
+				};
+			}),
+		)
+	).filter((block): block is ImageContent => block !== null);
 }
 
 export async function extractPDFPages(

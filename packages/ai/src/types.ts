@@ -201,6 +201,12 @@ export interface Usage {
 }
 
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+export type AttachmentRetryTarget = "document" | "image";
+
+export interface AssistantErrorMetadata {
+	local?: boolean;
+	attachmentRetryTargets?: AttachmentRetryTarget[];
+}
 
 export interface UserMessage {
 	role: "user";
@@ -218,6 +224,7 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	errorMetadata?: AssistantErrorMetadata;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 

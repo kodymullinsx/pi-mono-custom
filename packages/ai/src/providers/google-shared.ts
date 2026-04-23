@@ -4,6 +4,7 @@
 
 import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
 import type { Context, DocumentContent, ImageContent, Model, StopReason, Tool } from "../types.js";
+import { canInlineDocument, formatDocumentSummary } from "../utils/document-utils.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -82,15 +83,6 @@ function supportsMultimodalFunctionResponse(modelId: string): boolean {
 		return geminiMajorVersion >= 3;
 	}
 	return true;
-}
-
-function formatDocumentSummary(block: DocumentContent): string {
-	const name = block.fileName ?? "document";
-	return `[document attached: ${name} (${block.mimeType})]`;
-}
-
-function canInlineDocument(block: DocumentContent): boolean {
-	return block.mimeType === "application/pdf";
 }
 
 /**

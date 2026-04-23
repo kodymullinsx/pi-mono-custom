@@ -28,6 +28,7 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.js";
+import { formatDocumentSummary, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -37,18 +38,6 @@ import { transformMessages } from "./transform-messages.js";
 // =============================================================================
 // Utilities
 // =============================================================================
-
-function formatDocumentSummary(block: DocumentContent): string {
-	const name = block.fileName ?? "document";
-	return `[document attached: ${name} (${block.mimeType})]`;
-}
-
-function throwUnsupportedDocumentSerialization(block: DocumentContent, location: string): never {
-	const name = block.fileName ?? "document";
-	throw new Error(
-		`This OpenAI-compatible ${location} cannot accept first-class documents yet (${name}, ${block.mimeType}). Convert the file to PDF pages/images or extracted text before sending it to this model.`,
-	);
-}
 
 function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
 	const payload: TextSignatureV1 = { v: 1, id };
