@@ -3,6 +3,35 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "pi": {
+    "extensions": [
+      "./ast-grep",
+      "./auto-commit",
+      "./buddy",
+      "./compact-tool-renderer",
+      "./context-viewer",
+      "./custom-compaction",
+      "./dirty-repo-guard",
+      "./fancy-spinner",
+      "./git-checkpoint",
+      "./grackle",
+      "./handoff",
+      "./loop",
+      "./lsp",
+      "./monitor",
+      "./permission-gate",
+      "./pi-subagent",
+      "./plan-mode",
+      "./preset",
+      "./prompt-url-widget.ts",
+      "./protected-paths",
+      "./questionnaire",
+      "./redraws.ts",
+      "./review",
+      "./todos",
+      "./tps.ts"
+    ]
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "test:multimodal-ingress": "PI_HIDE_SUBAGENTS=1 pi --no-extensions -e ./multimodal-ingress/smoke-test.ts -p \"/run-multimodal-ingress-smoke-tests\""
