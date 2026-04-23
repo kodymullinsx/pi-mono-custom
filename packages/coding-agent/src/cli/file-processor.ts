@@ -9,12 +9,7 @@ import { basename, extname, resolve } from "path";
 import { resolveReadPath } from "../core/tools/path-utils.js";
 import { formatDimensionNote, getImageDimensions, resizeImage } from "../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.js";
-import {
-	getPDFPageCount,
-	PDF_AT_MENTION_INLINE_THRESHOLD,
-	readPDF,
-	renderPdfPagesToImageBlocks,
-} from "../utils/pdf.js";
+import { getPDFPageCount, PDF_AT_MENTION_INLINE_THRESHOLD, renderPdfPagesToImageBlocks } from "../utils/pdf.js";
 
 export interface ProcessedFiles {
 	text: string;
@@ -45,24 +40,17 @@ function supportsImageInput(model?: Model<Api>): boolean {
 	return model?.input.includes("image") ?? false;
 }
 
-function supportsDocumentInput(model?: Model<Api>): boolean {
-	return model?.input.includes("document") ?? false;
-}
-
-function supportsInlineDocumentAttachment(model: Model<Api> | undefined, mimeType: string): boolean {
-	return supportsDocumentInput(model) && mimeType === "application/pdf";
-}
-
 function buildPdfReferenceText(absolutePath: string, pageCount: number | null, reason: string): string {
 	const pageCountText = pageCount === null ? "an unknown number of pages" : `${pageCount} page(s)`;
 	return `<file name="${absolutePath}">[PDF referenced only: ${basename(absolutePath)} has ${pageCountText}. ${reason} Use the read tool with pages="1-5" to inspect specific ranges.]</file>\n`;
 }
 
-function buildPdfFallbackReason(baseReason: string, nativeAttachmentFailure?: string): string {
-	if (!nativeAttachmentFailure) {
-		return baseReason;
-	}
-	return `${baseReason} First-class PDF attachment failed: ${nativeAttachmentFailure}.`;
+function formatPdfPageRange(firstPage: number, lastPage: number): string {
+	return firstPage === lastPage ? `${firstPage}` : `${firstPage}-${lastPage}`;
+}
+
+function buildPdfContinuationNote(nextRange: string | undefined): string {
+	return nextRange ? ` Use the read tool with pages="${nextRange}" to continue.` : "";
 }
 
 async function processPdfFile(
@@ -70,100 +58,82 @@ async function processPdfFile(
 	options: { autoResizeImages: boolean; model?: Model<Api>; mtimeMs?: number },
 ): Promise<ProcessedFiles> {
 	const pageCount = await getPDFPageCount(absolutePath);
-	const supportsDocuments = supportsInlineDocumentAttachment(options.model, "application/pdf");
-	let nativeAttachmentFailure: string | undefined;
-
-	if (supportsDocuments) {
-		const pdfResult = await readPDF(absolutePath, { pageCount });
-		if (pdfResult.success) {
-			return {
-				text: `<file name="${absolutePath}">[PDF attached: ${basename(absolutePath)}${pageCount ? `, ${pageCount} page(s)` : ""}]</file>\n`,
-				attachments: [
-					{
-						type: "document",
-						mimeType: "application/pdf",
-						data: pdfResult.data.file.base64,
-						fileName: basename(absolutePath),
-					},
-				],
-			};
-		}
-		nativeAttachmentFailure = pdfResult.error.message;
-	}
-
-	if (pageCount !== null && pageCount > PDF_AT_MENTION_INLINE_THRESHOLD) {
-		return {
-			text: buildPdfReferenceText(
-				absolutePath,
-				pageCount,
-				buildPdfFallbackReason(
-					"Inline PDF ingestion is limited for larger files in this path.",
-					nativeAttachmentFailure,
-				),
-			),
-			attachments: [],
-		};
-	}
 
 	if (!supportsImageInput(options.model)) {
 		return {
 			text: buildPdfReferenceText(
 				absolutePath,
 				pageCount,
-				buildPdfFallbackReason(
-					"The current model does not support inline PDF rendering in this path.",
-					nativeAttachmentFailure,
-				),
+				"The current model does not support inline PDF rendering in this path.",
 			),
+			attachments: [],
+		};
+	}
+
+	const firstPage = 1;
+	const lastPage =
+		pageCount === null ? PDF_AT_MENTION_INLINE_THRESHOLD : Math.min(pageCount, PDF_AT_MENTION_INLINE_THRESHOLD);
+	const requestedPageCount = Math.max(1, lastPage - firstPage + 1);
+	const nextRange =
+		pageCount === null
+			? formatPdfPageRange(lastPage + 1, lastPage + requestedPageCount)
+			: lastPage < pageCount
+				? formatPdfPageRange(lastPage + 1, Math.min(pageCount, lastPage + requestedPageCount))
+				: undefined;
+
+	const attachments = await renderPdfPagesToImageBlocks(absolutePath, {
+		firstPage,
+		lastPage,
+		autoResize: options.autoResizeImages,
+		mtimeMs: options.mtimeMs,
+	});
+	if (attachments.length === 0) {
+		const requestedRange = formatPdfPageRange(firstPage, lastPage);
+		const totalSuffix = pageCount === null ? " Total page count unavailable." : ` of ${pageCount}.`;
+		return {
+			text:
+				`<file name="${absolutePath}">[` +
+				`PDF pages ${requestedRange}${totalSuffix} could not be attached as images because they could not be resized below the inline image size limit.` +
+				`${buildPdfContinuationNote(nextRange)}` +
+				`]</file>\n`,
 			attachments: [],
 		};
 	}
 
 	if (pageCount === null) {
-		return {
-			text: buildPdfReferenceText(
-				absolutePath,
-				pageCount,
-				buildPdfFallbackReason(
-					"Pi could not determine the page count needed to prepare a safe inline rendering.",
-					nativeAttachmentFailure,
-				),
-			),
-			attachments: [],
-		};
-	}
-
-	const attachments = await renderPdfPagesToImageBlocks(absolutePath, {
-		firstPage: 1,
-		lastPage: pageCount,
-		autoResize: options.autoResizeImages,
-		mtimeMs: options.mtimeMs,
-	});
-	if (attachments.length === 0) {
-		return {
-			text: `<file name="${absolutePath}">[${buildPdfFallbackReason(
-				`PDF pages omitted: ${basename(absolutePath)} could not be resized below the inline image size limit.`,
-				nativeAttachmentFailure,
-			)}]</file>\n`,
-			attachments: [],
-		};
-	}
-
-	const nativeAttachmentPrefix = nativeAttachmentFailure
-		? `First-class PDF attachment failed: ${nativeAttachmentFailure}. `
-		: "";
-	if (attachments.length < pageCount) {
+		const attachedRange = formatPdfPageRange(firstPage, firstPage + attachments.length - 1);
 		return {
 			text:
 				`<file name="${absolutePath}">[` +
-				`${nativeAttachmentPrefix}Only ${attachments.length} of ${pageCount} PDF page(s) from ${basename(absolutePath)} ` +
-				`could be attached as images. Remaining page(s) were omitted because they could not be resized below the inline image size limit.` +
+				`PDF pages ${attachedRange} attached as images from ${basename(absolutePath)}. Total page count unavailable.` +
+				`${buildPdfContinuationNote(nextRange)}` +
 				`]</file>\n`,
 			attachments,
 		};
 	}
+
+	if (attachments.length < requestedPageCount) {
+		const requestedRange = formatPdfPageRange(firstPage, lastPage);
+		return {
+			text:
+				`<file name="${absolutePath}">[` +
+				`Only ${attachments.length} of ${requestedPageCount} PDF page(s) from ${basename(absolutePath)} ` +
+				`in pages ${requestedRange}${pageCount ? ` of ${pageCount}` : ""} could be attached as images. Remaining page(s) were omitted because they could not be resized below the inline image size limit.` +
+				`${buildPdfContinuationNote(nextRange)}` +
+				`]</file>\n`,
+			attachments,
+		};
+	}
+
+	const attachedRange = formatPdfPageRange(firstPage, lastPage);
+	const totalSuffix = pageCount > PDF_AT_MENTION_INLINE_THRESHOLD ? ` of ${pageCount}` : "";
 	return {
-		text: `<file name="${absolutePath}">[${nativeAttachmentPrefix}PDF pages 1-${attachments.length} attached as images from ${basename(absolutePath)}]</file>\n`,
+		text:
+			`<file name="${absolutePath}">[` +
+			`PDF pages ${attachedRange}${totalSuffix} attached as images from ${basename(absolutePath)}.` +
+			`${pageCount > PDF_AT_MENTION_INLINE_THRESHOLD ? " Auto-attached first range." : ""}` +
+			`${buildPdfContinuationNote(nextRange)}` +
+			`]</file>\n`,
 		attachments,
 	};
 }

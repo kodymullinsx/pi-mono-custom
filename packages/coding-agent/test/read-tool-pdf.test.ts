@@ -10,7 +10,6 @@ vi.mock("../src/utils/pdf.js", () => ({
 	parsePDFPageRange: vi.fn(),
 	PDF_AT_MENTION_INLINE_THRESHOLD: 10,
 	PDF_MAX_PAGES_PER_READ: 20,
-	readPDF: vi.fn(),
 	renderPdfPagesToImageBlocks: vi.fn(),
 }));
 
@@ -35,7 +34,7 @@ vi.mock("../src/utils/image-resize.js", () => ({
 
 import { createReadToolDefinition } from "../src/core/tools/read.js";
 import { getImageDimensions, resizeImage } from "../src/utils/image-resize.js";
-import { getPDFPageCount, parsePDFPageRange, readPDF, renderPdfPagesToImageBlocks } from "../src/utils/pdf.js";
+import { getPDFPageCount, parsePDFPageRange, renderPdfPagesToImageBlocks } from "../src/utils/pdf.js";
 
 function createModel(input: Model<any>["input"]): Model<any> {
 	return {
@@ -82,8 +81,8 @@ describe("read tool PDF support", () => {
 		pdfPath = join(testDir, "sample.pdf");
 		writeFileSync(pdfPath, "%PDF-1.4\nfake pdf body");
 
-		vi.mocked(readPDF).mockReset();
 		vi.mocked(renderPdfPagesToImageBlocks).mockReset();
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue([]);
 		vi.mocked(getPDFPageCount).mockResolvedValue(12);
 		vi.mocked(parsePDFPageRange).mockImplementation((pages: string) => {
 			if (pages === "2-3") {
@@ -102,52 +101,91 @@ describe("read tool PDF support", () => {
 		rmSync(testDir, { recursive: true, force: true });
 	});
 
-	it("requires pages for PDFs above the inline threshold", async () => {
-		const tool = createReadToolDefinition(testDir);
-
-		await expect(
-			tool.execute("read-pdf-threshold", { path: pdfPath }, undefined, undefined, createExtensionContext()),
-		).rejects.toThrow(/too many to read at once/i);
-	});
-
-	it("keeps large PDFs as first-class documents for document-capable models", async () => {
-		vi.mocked(readPDF).mockResolvedValue({
-			success: true,
-			data: {
-				type: "pdf",
-				file: {
-					filePath: pdfPath,
-					base64: Buffer.from("native-pdf").toString("base64"),
-					originalSize: 1234,
-					pageCount: 12,
-				},
-			},
-		});
+	it("auto-selects the first range for PDFs above the inline threshold", async () => {
+		const pageImages = Array.from({ length: 10 }, (_, index) => ({
+			type: "image" as const,
+			mimeType: "image/jpeg",
+			data: `resized-page-${index + 1}`,
+		}));
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue(pageImages);
 
 		const tool = createReadToolDefinition(testDir);
 		const result = await tool.execute(
-			"read-pdf-native",
+			"read-pdf-threshold",
+			{ path: pdfPath },
+			undefined,
+			undefined,
+			createExtensionContext(),
+		);
+
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text:
+				'Showing PDF pages 1-10 of 12. Auto-selected first range. Use pages="11-12" to continue.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]',
+		});
+		expect(renderPdfPagesToImageBlocks).toHaveBeenCalledWith(
+			pdfPath,
+			expect.objectContaining({
+				firstPage: 1,
+				lastPage: 10,
+			}),
+		);
+		expect(result.details).toEqual({
+			pdf: {
+				pageCount: 12,
+				renderedPages: 10,
+				firstPage: 1,
+				lastPage: 10,
+				rangeSize: 10,
+				previousRange: undefined,
+				nextRange: "11-12",
+			},
+		});
+	});
+
+	it("uses visual PDF rendering even for document-capable models", async () => {
+		const pageImages = Array.from({ length: 10 }, (_, index) => ({
+			type: "image" as const,
+			mimeType: "image/jpeg",
+			data: `resized-page-${index + 1}`,
+		}));
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue(pageImages);
+
+		const tool = createReadToolDefinition(testDir);
+		const result = await tool.execute(
+			"read-pdf-document-capable",
 			{ path: pdfPath },
 			undefined,
 			undefined,
 			createExtensionContext(createModel(["text", "image", "document"])),
 		);
 
-		expect(result.content).toEqual([
-			{ type: "text", text: "Read PDF file [application/pdf] (12 page(s))" },
-			{
-				type: "document",
-				mimeType: "application/pdf",
-				data: Buffer.from("native-pdf").toString("base64"),
-				fileName: "sample.pdf",
-			},
-		]);
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text:
+				'Showing PDF pages 1-10 of 12. Auto-selected first range. Use pages="11-12" to continue.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]',
+		});
+		expect(result.content.filter((block) => block.type === "image")).toHaveLength(10);
 		expect(result.details).toEqual({
 			pdf: {
 				pageCount: 12,
+				renderedPages: 10,
+				firstPage: 1,
+				lastPage: 10,
+				rangeSize: 10,
+				previousRange: undefined,
+				nextRange: "11-12",
 			},
 		});
-		expect(renderPdfPagesToImageBlocks).not.toHaveBeenCalled();
+		expect(renderPdfPagesToImageBlocks).toHaveBeenCalledWith(
+			pdfPath,
+			expect.objectContaining({
+				firstPage: 1,
+				lastPage: 10,
+			}),
+		);
 	});
 
 	it("renders requested PDF page ranges as image attachments", async () => {
@@ -178,7 +216,9 @@ describe("read tool PDF support", () => {
 
 		expect(textBlock).toEqual({
 			type: "text",
-			text: 'Showing PDF pages 2-3 of 12. Use pages="4-5" to continue.',
+			text:
+				'Showing PDF pages 2-3 of 12. Use pages="4-5" to continue.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]',
 		});
 		expect(imageBlocks).toHaveLength(2);
 		expect(imageBlocks[0]).toMatchObject({
@@ -226,6 +266,7 @@ describe("read tool PDF support", () => {
 			type: "text",
 			text:
 				'Prepared 1 of 2 requested PDF pages 2-3 of 12. Use pages="4-5" to continue.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]\n' +
 				"[Some requested PDF pages were omitted because they could not be resized below the inline image size limit.]",
 		});
 		expect(result.details).toEqual({
@@ -274,7 +315,6 @@ describe("read tool PDF support", () => {
 			createExtensionContext(createModel(["text", "image", "document"])),
 		);
 
-		expect(readPDF).not.toHaveBeenCalled();
 		expect(renderPdfPagesToImageBlocks).toHaveBeenCalledWith(
 			pdfPath,
 			expect.objectContaining({
@@ -290,7 +330,10 @@ describe("read tool PDF support", () => {
 		expect(result.content).toEqual([
 			{
 				type: "text",
-				text: 'Showing PDF page 4 of 12. Use pages="5" to continue.\n[Image dimensions: 1200x800. Coordinates map directly to the original image.]',
+				text:
+					'Showing PDF page 4 of 12. Use pages="5" to continue.\n' +
+					"[Image dimensions: 1200x800. Coordinates map directly to the original image.]\n" +
+					'[To inspect a smaller area, re-read this page with pages="4" and region={left,top,width,height}.]',
 			},
 			{
 				type: "image",
