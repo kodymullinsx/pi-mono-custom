@@ -99,6 +99,10 @@ function getMessageFromEntryForCompaction(entry: SessionEntry): AgentMessage | u
 	return getMessageFromEntry(entry);
 }
 
+function isVisibleCustomTurnBoundary(entry: SessionEntry): boolean {
+	return entry.type === "custom_message" && entry.display;
+}
+
 /** Result from compact() - SessionManager adds uuid/parentUuid when saving */
 export interface CompactionResult<T = unknown> {
 	summary: string;
@@ -339,8 +343,8 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 				break;
 		}
 
-		// branch_summary and custom_message are user-role messages, valid cut points
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		// branch_summary and visible custom messages are user-role messages, valid cut points
+		if (entry.type === "branch_summary" || isVisibleCustomTurnBoundary(entry)) {
 			cutPoints.push(i);
 		}
 	}
@@ -355,8 +359,8 @@ function findValidCutPoints(entries: SessionEntry[], startIndex: number, endInde
 export function findTurnStartIndex(entries: SessionEntry[], entryIndex: number, startIndex: number): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
 		const entry = entries[i];
-		// branch_summary and custom_message are user-role messages, can start a turn
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		// branch_summary and visible custom messages are user-role messages, can start a turn
+		if (entry.type === "branch_summary" || isVisibleCustomTurnBoundary(entry)) {
 			return i;
 		}
 		if (entry.type === "message") {

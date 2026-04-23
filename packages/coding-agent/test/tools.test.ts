@@ -21,6 +21,7 @@ const bashTool = createBashTool(process.cwd());
 const grepTool = createGrepTool(process.cwd());
 const findTool = createFindTool(process.cwd());
 const lsTool = createLsTool(process.cwd());
+const RED_CIRCLE_IMAGE = join(process.cwd(), "..", "ai", "test", "data", "red-circle.png");
 
 // Helper to extract text from content blocks
 function getTextOutput(result: any): string {
@@ -197,6 +198,21 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain("definitely not a png");
 			expect(result.content.some((c: any) => c.type === "image")).toBe(false);
+		});
+
+		it("supports region crops for visual inspection", async () => {
+			const result = await readTool.execute("test-call-img-crop", {
+				path: RED_CIRCLE_IMAGE,
+				region: { left: 40, top: 50, width: 80, height: 60 },
+			});
+			const output = getTextOutput(result);
+
+			expect(output).toContain("Read image file [");
+			expect(output).toContain("left=40");
+			expect(output).toContain("top=50");
+			expect(output).toContain("width=80");
+			expect(output).toContain("height=60");
+			expect(result.content.some((c: any) => c.type === "image")).toBe(true);
 		});
 	});
 

@@ -101,6 +101,26 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain("README.md");
 	});
 
+	test("renders read pages and region arguments in the built-in call label", () => {
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-3b",
+			{
+				path: "evidence.pdf",
+				pages: "6-10",
+				region: { left: 10, top: 20, width: 300, height: 200 },
+			},
+			{},
+			undefined,
+			createFakeTui(),
+			process.cwd(),
+		);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).toContain("evidence.pdf");
+		expect(rendered).toContain("pages=6-10");
+		expect(rendered).toContain("region=10,20,300x200");
+	});
+
 	test("bash execute emits an initial empty partial update before output arrives", async () => {
 		const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: unknown }> = [];
 		const operations: BashOperations = {

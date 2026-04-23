@@ -112,6 +112,37 @@ describe("resizeImage", () => {
 		expect(result!.originalWidth).toBe(2);
 		expect(result!.originalHeight).toBe(2);
 	});
+
+	it("should crop before applying resize limits", async () => {
+		const result = await resizeImage(
+			{ type: "image", data: LARGE_PNG_200x200, mimeType: "image/png" },
+			{ crop: { left: 40, top: 60, width: 80, height: 50 }, maxWidth: 2000, maxHeight: 2000, maxBytes: 1024 * 1024 },
+		);
+
+		expect(result).not.toBeNull();
+		expect(result!.crop).toEqual({ left: 40, top: 60, width: 80, height: 50 });
+		expect(result!.originalWidth).toBe(200);
+		expect(result!.originalHeight).toBe(200);
+		expect(result!.width).toBe(80);
+		expect(result!.height).toBe(50);
+	});
+
+	it("clips partially out-of-bounds crop regions", async () => {
+		const result = await resizeImage(
+			{ type: "image", data: LARGE_PNG_200x200, mimeType: "image/png" },
+			{
+				crop: { left: 180, top: 190, width: 40, height: 40 },
+				maxWidth: 2000,
+				maxHeight: 2000,
+				maxBytes: 1024 * 1024,
+			},
+		);
+
+		expect(result).not.toBeNull();
+		expect(result!.crop).toEqual({ left: 180, top: 190, width: 20, height: 10 });
+		expect(result!.width).toBe(20);
+		expect(result!.height).toBe(10);
+	});
 });
 
 describe("formatDimensionNote", () => {
@@ -128,6 +159,22 @@ describe("formatDimensionNote", () => {
 		expect(note).toBeUndefined();
 	});
 
+	it("can include original dimensions for non-resized images when requested", () => {
+		const note = formatDimensionNote(
+			{
+				data: "",
+				mimeType: "image/png",
+				originalWidth: 100,
+				originalHeight: 100,
+				width: 100,
+				height: 100,
+				wasResized: false,
+			},
+			{ includeOriginalDimensions: true },
+		);
+		expect(note).toContain("Image dimensions: 100x100");
+	});
+
 	it("should return formatted note for resized images", () => {
 		const note = formatDimensionNote({
 			data: "",
@@ -141,5 +188,28 @@ describe("formatDimensionNote", () => {
 		expect(note).toContain("original 2000x1000");
 		expect(note).toContain("displayed at 1000x500");
 		expect(note).toContain("2.00"); // scale factor
+	});
+
+	it("returns crop-aware mapping guidance", () => {
+		const note = formatDimensionNote({
+			data: "",
+			mimeType: "image/png",
+			originalWidth: 200,
+			originalHeight: 100,
+			width: 40,
+			height: 20,
+			wasResized: true,
+			crop: {
+				left: 10,
+				top: 5,
+				width: 80,
+				height: 40,
+			},
+		});
+		expect(note).toContain("left=10");
+		expect(note).toContain("top=5");
+		expect(note).toContain("width=80");
+		expect(note).toContain("height=40");
+		expect(note).toContain("offset by (10, 5)");
 	});
 });

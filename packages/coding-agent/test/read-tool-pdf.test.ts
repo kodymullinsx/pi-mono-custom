@@ -14,7 +14,27 @@ vi.mock("../src/utils/pdf.js", () => ({
 	renderPdfPagesToImageBlocks: vi.fn(),
 }));
 
+vi.mock("../src/utils/image-resize.js", () => ({
+	getImageDimensions: vi.fn(),
+	clipImageCropRegion: vi.fn((region, width, height) => {
+		const right = Math.min(width, region.left + region.width);
+		const bottom = Math.min(height, region.top + region.height);
+		if (right <= region.left || bottom <= region.top) {
+			return null;
+		}
+		return {
+			left: region.left,
+			top: region.top,
+			width: right - region.left,
+			height: bottom - region.top,
+		};
+	}),
+	formatDimensionNote: vi.fn(() => "[Image dimensions: 1200x800. Coordinates map directly to the original image.]"),
+	resizeImage: vi.fn(),
+}));
+
 import { createReadToolDefinition } from "../src/core/tools/read.js";
+import { getImageDimensions, resizeImage } from "../src/utils/image-resize.js";
 import { getPDFPageCount, parsePDFPageRange, readPDF, renderPdfPagesToImageBlocks } from "../src/utils/pdf.js";
 
 function createModel(input: Model<any>["input"]): Model<any> {
@@ -62,13 +82,20 @@ describe("read tool PDF support", () => {
 		pdfPath = join(testDir, "sample.pdf");
 		writeFileSync(pdfPath, "%PDF-1.4\nfake pdf body");
 
+		vi.mocked(readPDF).mockReset();
+		vi.mocked(renderPdfPagesToImageBlocks).mockReset();
 		vi.mocked(getPDFPageCount).mockResolvedValue(12);
 		vi.mocked(parsePDFPageRange).mockImplementation((pages: string) => {
 			if (pages === "2-3") {
 				return { firstPage: 2, lastPage: 3 };
 			}
+			if (pages === "4") {
+				return { firstPage: 4, lastPage: 4 };
+			}
 			return null;
 		});
+		vi.mocked(getImageDimensions).mockResolvedValue({ width: 1200, height: 800 });
+		vi.mocked(resizeImage).mockReset();
 	});
 
 	afterEach(() => {
@@ -149,7 +176,10 @@ describe("read tool PDF support", () => {
 		const textBlock = result.content.find((block) => block.type === "text");
 		const imageBlocks = result.content.filter((block) => block.type === "image");
 
-		expect(textBlock).toEqual({ type: "text", text: "Read PDF pages 2-3" });
+		expect(textBlock).toEqual({
+			type: "text",
+			text: 'Showing PDF pages 2-3 of 12. Use pages="4-5" to continue.',
+		});
 		expect(imageBlocks).toHaveLength(2);
 		expect(imageBlocks[0]).toMatchObject({
 			type: "image",
@@ -167,7 +197,116 @@ describe("read tool PDF support", () => {
 				renderedPages: 2,
 				firstPage: 2,
 				lastPage: 3,
+				rangeSize: 2,
+				previousRange: "1",
+				nextRange: "4-5",
 			},
 		});
+	});
+
+	it("forces single-page raster rendering for PDF region reads", async () => {
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue([
+			{
+				type: "image",
+				mimeType: "image/jpeg",
+				data: "raw-page-image",
+			},
+		]);
+		vi.mocked(resizeImage).mockResolvedValue({
+			data: "cropped-page-image",
+			mimeType: "image/jpeg",
+			originalWidth: 1200,
+			originalHeight: 800,
+			width: 300,
+			height: 200,
+			wasResized: true,
+			crop: {
+				left: 100,
+				top: 120,
+				width: 300,
+				height: 200,
+			},
+		});
+
+		const tool = createReadToolDefinition(testDir);
+		const result = await tool.execute(
+			"read-pdf-region",
+			{ path: pdfPath, pages: "4", region: { left: 100, top: 120, width: 300, height: 200 } },
+			undefined,
+			undefined,
+			createExtensionContext(createModel(["text", "image", "document"])),
+		);
+
+		expect(readPDF).not.toHaveBeenCalled();
+		expect(renderPdfPagesToImageBlocks).toHaveBeenCalledWith(
+			pdfPath,
+			expect.objectContaining({
+				firstPage: 4,
+				lastPage: 4,
+				autoResize: false,
+			}),
+		);
+		expect(resizeImage).toHaveBeenCalledWith(
+			{ type: "image", mimeType: "image/jpeg", data: "raw-page-image" },
+			{ crop: { left: 100, top: 120, width: 300, height: 200 } },
+		);
+		expect(result.content).toEqual([
+			{
+				type: "text",
+				text: 'Showing PDF page 4 of 12. Use pages="5" to continue.\n[Image dimensions: 1200x800. Coordinates map directly to the original image.]',
+			},
+			{
+				type: "image",
+				mimeType: "image/jpeg",
+				data: "cropped-page-image",
+			},
+		]);
+		expect(result.details).toEqual({
+			pdf: {
+				pageCount: 12,
+				renderedPages: 1,
+				firstPage: 4,
+				lastPage: 4,
+				rangeSize: 1,
+				previousRange: "3",
+				nextRange: "5",
+			},
+		});
+	});
+
+	it("rejects PDF region reads that span multiple pages", async () => {
+		const tool = createReadToolDefinition(testDir);
+
+		await expect(
+			tool.execute(
+				"read-pdf-region-multi",
+				{ path: pdfPath, pages: "2-3", region: { left: 0, top: 0, width: 100, height: 100 } },
+				undefined,
+				undefined,
+				createExtensionContext(),
+			),
+		).rejects.toThrow(/exactly one page/i);
+	});
+
+	it("rejects PDF region reads when the crop misses the page bounds", async () => {
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue([
+			{
+				type: "image",
+				mimeType: "image/jpeg",
+				data: "raw-page-image",
+			},
+		]);
+
+		const tool = createReadToolDefinition(testDir);
+
+		await expect(
+			tool.execute(
+				"read-pdf-region-empty",
+				{ path: pdfPath, pages: "4", region: { left: 5000, top: 5000, width: 50, height: 50 } },
+				undefined,
+				undefined,
+				createExtensionContext(),
+			),
+		).rejects.toThrow(/does not overlap the image bounds/i);
 	});
 });

@@ -247,6 +247,7 @@ type ReadFileStateEntry = {
 	mtimeMs: number;
 	offset?: number;
 	limit?: number;
+	regionKey?: string;
 };
 
 type AttachmentRetryTarget = "document" | "image";
@@ -542,6 +543,9 @@ export class AgentSession {
 				mtimeMs: stats.mtimeMs,
 				offset: request.offset,
 				limit: request.limit,
+				regionKey: request.region
+					? `${request.region.left},${request.region.top},${request.region.width},${request.region.height}`
+					: undefined,
 			};
 			const previousState = this._readFileState.get(request.absolutePath);
 			this._readFileState.set(request.absolutePath, nextState);
@@ -550,7 +554,8 @@ export class AgentSession {
 				previousState &&
 				previousState.mtimeMs === nextState.mtimeMs &&
 				previousState.offset === nextState.offset &&
-				previousState.limit === nextState.limit
+				previousState.limit === nextState.limit &&
+				previousState.regionKey === nextState.regionKey
 			) {
 				return [{ type: "text", text: FILE_UNCHANGED_TEXT }];
 			}
@@ -566,6 +571,12 @@ export class AgentSession {
 		offset?: number;
 		limit?: number;
 		pages?: string;
+		region?: {
+			left: number;
+			top: number;
+			width: number;
+			height: number;
+		};
 	} {
 		if (!args || typeof args !== "object") {
 			return {};
@@ -577,6 +588,7 @@ export class AgentSession {
 			offset?: unknown;
 			limit?: unknown;
 			pages?: unknown;
+			region?: unknown;
 		};
 		const rawPath =
 			typeof input.path === "string"
@@ -593,6 +605,20 @@ export class AgentSession {
 			offset: typeof input.offset === "number" ? input.offset : undefined,
 			limit: typeof input.limit === "number" ? input.limit : undefined,
 			pages: typeof input.pages === "string" ? input.pages : undefined,
+			region:
+				typeof input.region === "object" &&
+				input.region !== null &&
+				typeof (input.region as { left?: unknown }).left === "number" &&
+				typeof (input.region as { top?: unknown }).top === "number" &&
+				typeof (input.region as { width?: unknown }).width === "number" &&
+				typeof (input.region as { height?: unknown }).height === "number"
+					? {
+							left: (input.region as { left: number }).left,
+							top: (input.region as { top: number }).top,
+							width: (input.region as { width: number }).width,
+							height: (input.region as { height: number }).height,
+						}
+					: undefined,
 		};
 	}
 

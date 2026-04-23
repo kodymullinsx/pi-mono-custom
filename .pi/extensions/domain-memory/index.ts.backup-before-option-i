@@ -1,0 +1,312 @@
+/**
+ * Domain Memory Extension
+ *
+ * Equivalent to Claude's domain_memory.py (UserPromptSubmit hook) and
+ * memory_index_regen.py (PostToolUse hook).
+ *
+ * - Uses CWD to choose memory tree on each prompt
+ * - `~/work/*` -> attempt semantic routing against `~/work/Memory/`
+ * - all other paths -> attempt semantic routing against `~/projects/Memory/`
+ * - on confident match -> inject matched `memory.md` + full tree `_index.md`
+ * - on router failure or no match -> inject tree `_index.md` only
+ * - Regenerates `_index.md` when a `memory.md` is written or edited
+ */
+
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { join, resolve, basename } from "node:path";
+import { homedir } from "node:os";
+import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@mariozechner/pi-coding-agent";
+
+const HOME = homedir();
+const PROJECTS_MEMORY_ROOT = join(HOME, "projects", "Memory");
+const WORK_MEMORY_ROOT = join(HOME, "work", "Memory");
+const PROJECTS_INDEX = join(PROJECTS_MEMORY_ROOT, "_index.md");
+const WORK_INDEX = join(WORK_MEMORY_ROOT, "_index.md");
+
+const ROUTE_URL = "http://127.0.0.1:18432/route";
+const SERVER_TIMEOUT_MS = 2000;
+
+// --- Intent Gate G1 (inline) ---
+// Blocks router call when query shows strong general-knowledge / generation intent.
+// Mirrors domain_memory.py: block on negative signals, pass everything else.
+// TPR=100%, FPR=3.3%, p50=0.025ms (validated on eval_set.json).
+const _G1_NEGATIVE: RegExp[] = [
+	/\bexplain\b/i,
+	/\bwrite a\b/i,
+	/\bwrite me\b/i,
+	/\bwrite .{0,15}\b(code|function|script|example|sample)\b/i,
+	/\bgenerate\b/i,
+	/\bcreate a\b/i,
+	/\bcreate me\b/i,
+	/\bmake me\b/i,
+	/\bgive me an example\b/i,
+	/\bshow me an example\b/i,
+	/\bwhat is a\b/i,
+	/\bwhat's a\b/i,
+	/\bwhat is an\b/i,
+	/\bwhat's an\b/i,
+	/\bhow does\b/i,
+	/\bhow do you\b/i,
+	/\bdesign a\b/i,
+	/\bbuild a\b/i,
+	/\bfrom scratch\b/i,
+	/\bwalk me through\b/i,
+	/\bcompare\b/i,
+	/\bwhich is better\b/i,
+	/\bbest practice\b/i,
+	/\bbest approach\b/i,
+	/\brecommend\b/i,
+	/\bpros and cons\b/i,
+	/\bwhat are the best\b/i,
+	/\bbeginner guide\b/i,
+	/\btutorial\b/i,
+	/\bexplained\b/i,
+	/\btypical\b/i,
+	/\bgeneral\b/i,
+	/\baverage\b/i,
+	/\bcommonly\b/i,
+	/\bin general\b/i,
+	/\bmost people\b/i,
+	/\bstandard\b/i,
+	/\bnormal range\b/i,
+];
+
+/**
+ * Return true if the query should proceed to memory retrieval.
+ * Blocks on negative signals (generation/general-knowledge intent).
+ */
+function intentGateG1(query: string): boolean {
+	return !_G1_NEGATIVE.some((pat) => pat.test(query));
+}
+
+function readFile(filePath: string, maxLines?: number): string {
+	if (!existsSync(filePath)) return "";
+	const lines = readFileSync(filePath, "utf-8").split("\n");
+	if (maxLines == null) return lines.join("\n");
+	return lines.slice(0, maxLines).join("\n");
+}
+
+function normalizePath(filePath: string): string {
+	try {
+		return realpathSync.native(filePath).toLowerCase();
+	} catch {
+		return resolve(filePath).toLowerCase();
+	}
+}
+
+async function callRouter(
+	query: string,
+	scope: "personal" | "work",
+	signal?: AbortSignal,
+): Promise<{ matched: boolean; domain_id: string; confidence: number; path?: string | null } | null> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), SERVER_TIMEOUT_MS);
+	const combinedSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+	try {
+		const resp = await fetch(ROUTE_URL, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query, scope }),
+			signal: combinedSignal,
+		});
+		if (!resp.ok) {
+			throw new Error(`Router returned ${resp.status} ${resp.statusText}`.trim());
+		}
+		return (await resp.json()) as {
+			matched: boolean;
+			domain_id: string;
+			confidence: number;
+			path?: string | null;
+		};
+	} catch (error) {
+		if (!combinedSignal.aborted) {
+			console.warn("[domain-memory] Router call failed, falling back to index only:", error);
+		}
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+function isAllowedDomain(scope: "personal" | "work", domainId: string): boolean {
+	if (scope === "work") return domainId === "work" || domainId.startsWith("work/");
+	return (
+		domainId === "personal" ||
+		domainId.startsWith("personal/") ||
+		domainId === "projects" ||
+		domainId.startsWith("projects/")
+	);
+}
+
+function resolveDomainMemoryPath(memoryRoot: string, domainId: string, relativePath?: string | null): string {
+	if (relativePath) return resolve(memoryRoot, relativePath);
+	if (domainId === "work") return resolve(memoryRoot, "memory.md");
+	return resolve(memoryRoot, domainId, "memory.md");
+}
+
+function isWithinMemoryRoot(memoryRoot: string, targetPath: string): boolean {
+	const normalizedRoot = normalizePath(memoryRoot);
+	const normalizedTarget = normalizePath(targetPath);
+	return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
+}
+
+async function buildScopedContext(prompt: string, scope: "personal" | "work", signal?: AbortSignal): Promise<string> {
+	const memoryRoot = scope === "work" ? WORK_MEMORY_ROOT : PROJECTS_MEMORY_ROOT;
+	const indexPath = scope === "work" ? WORK_INDEX : PROJECTS_INDEX;
+	const rootLabel = scope === "work" ? "~/work/Memory" : "~/projects/Memory";
+	const scopeLabel = scope === "work" ? "work" : "personal + projects";
+	const indexContent = readFile(indexPath);
+	if (!indexContent) return "";
+
+	if (prompt && intentGateG1(prompt)) {
+		const result = await callRouter(prompt, scope, signal);
+		if (result?.matched && isAllowedDomain(scope, result.domain_id)) {
+			const domainPath = resolveDomainMemoryPath(memoryRoot, result.domain_id, result.path);
+			const domainContent = isWithinMemoryRoot(memoryRoot, domainPath) ? readFile(domainPath, 100) : "";
+			if (domainContent) {
+				return (
+					`Domain memory (${scopeLabel}). Root: ${rootLabel}\n` +
+					`Semantic match: ${result.domain_id} (confidence: ${result.confidence.toFixed(3)})\n\n` +
+					`${domainContent}\n\n` +
+					indexContent
+				);
+			}
+		}
+	}
+
+	return `Domain memory available (${scopeLabel}). Root: ${rootLabel}\n\n${indexContent}`;
+}
+
+// --- Index regeneration (mirrors memory_index_regen.py) ---
+
+function extractFrontmatter(filePath: string): Record<string, string> {
+	if (!existsSync(filePath)) return {};
+	const content = readFileSync(filePath, "utf-8");
+	if (!content.startsWith("---")) return {};
+	const end = content.indexOf("---", 3);
+	if (end === -1) return {};
+	const result: Record<string, string> = {};
+	for (const line of content.slice(3, end).trim().split("\n")) {
+		const colonIdx = line.indexOf(":");
+		if (colonIdx !== -1) {
+			result[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim();
+		}
+	}
+	return result;
+}
+
+function findDomains(memoryRoot: string): Array<{ domain: string; description: string }> {
+	const domains: Array<{ domain: string; description: string }> = [];
+	const rootFrontmatter = extractFrontmatter(join(memoryRoot, "memory.md"));
+	if (rootFrontmatter.domain && rootFrontmatter.indexed !== "false") {
+		domains.push({ domain: rootFrontmatter.domain, description: rootFrontmatter.description ?? "" });
+	}
+
+	function walk(dir: string): void {
+		let entries: string[];
+		try {
+			entries = readdirSync(dir).sort();
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const full = join(dir, entry);
+			try {
+				if (!statSync(full).isDirectory()) continue;
+			} catch {
+				continue;
+			}
+			const memFile = join(full, "memory.md");
+			const fm = extractFrontmatter(memFile);
+			if (fm.domain && fm.indexed !== "false") {
+				domains.push({ domain: fm.domain, description: fm.description ?? "" });
+			}
+			walk(full);
+		}
+	}
+
+	walk(memoryRoot);
+	return domains;
+}
+
+function generateIndex(memoryRoot: string): string {
+	const domains = findDomains(memoryRoot);
+	const isWork = memoryRoot.includes("/work/Memory");
+	const personal: typeof domains = [];
+	const projects: typeof domains = [];
+	const work: typeof domains = [];
+
+	for (const d of domains) {
+		if (d.domain === "personal" || d.domain.startsWith("personal/")) personal.push(d);
+		else if (d.domain === "projects" || d.domain.startsWith("projects/")) projects.push(d);
+		else if (d.domain === "work" || d.domain.startsWith("work/")) work.push(d);
+	}
+
+	const lines: string[] = [];
+	if (isWork) {
+		lines.push("# Memory Domains — Work\n", "## Work");
+		for (const d of work) lines.push(`- **${d.domain}** — ${d.description}`);
+	} else {
+		lines.push("# Memory Domains — Personal + Projects\n");
+		if (personal.length) {
+			lines.push("## Personal");
+			for (const d of personal) lines.push(`- **${d.domain}** — ${d.description}`);
+		}
+		if (projects.length) {
+			lines.push("## Projects");
+			for (const d of projects) lines.push(`- **${d.domain}** — ${d.description}`);
+		}
+	}
+
+	const pathPrefix = isWork ? "~/work/Memory" : "~/projects/Memory";
+	lines.push("", "---", "", `All domain files are at \`${pathPrefix}/[path]/memory.md\`. Read the relevant domain's memory.md for context.`);
+	return lines.join("\n") + "\n";
+}
+
+function regenIndexIfNeeded(filePath: string): void {
+	if (basename(filePath) !== "memory.md") return;
+	for (const root of [PROJECTS_MEMORY_ROOT, WORK_MEMORY_ROOT]) {
+		if (!isWithinMemoryRoot(root, filePath)) continue;
+		const newContent = generateIndex(root);
+		const indexPath = join(root, "_index.md");
+		try {
+			if (existsSync(indexPath) && readFileSync(indexPath, "utf-8") === newContent) return;
+		} catch (error) {
+			console.warn("[domain-memory] Failed to read existing index, regenerating anyway:", error);
+		}
+		try {
+			writeFileSync(indexPath, newContent, "utf-8");
+		} catch (error) {
+			console.warn("[domain-memory] Failed to write regenerated index:", error);
+		}
+		break;
+	}
+}
+
+// --- Extension entry point ---
+
+export default function domainMemoryExtension(pi: ExtensionAPI): void {
+	pi.on("before_agent_start", async (event, ctx) => {
+		const cwd = ctx.cwd;
+		let context = "";
+
+		if (isWithinMemoryRoot(join(HOME, "work"), cwd)) {
+			context = await buildScopedContext(event.prompt ?? "", "work", ctx.signal);
+		} else {
+			context = await buildScopedContext(event.prompt ?? "", "personal", ctx.signal);
+		}
+
+		if (!context) return;
+		return { systemPrompt: `${event.systemPrompt}\n\n${context}` };
+	});
+
+	pi.on("tool_result", (event: ToolResultEvent, ctx: ExtensionContext) => {
+		const toolName = (event as unknown as { toolName: string }).toolName;
+		if (toolName !== "write" && toolName !== "edit") return;
+		if ((event as unknown as { isError?: boolean }).isError) return;
+		const input = (event as unknown as { input?: { path?: string } }).input;
+		const p = input?.path;
+		if (!p) return;
+		regenIndexIfNeeded(resolve(ctx.cwd, p));
+	});
+}

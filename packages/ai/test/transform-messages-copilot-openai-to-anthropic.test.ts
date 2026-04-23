@@ -188,4 +188,54 @@ describe("OpenAI to Anthropic session migration for Copilot Claude", () => {
 			content: [{ type: "text", text: "No result provided" }],
 		});
 	});
+
+	it("does not synthesize a fallback result when a real tool result is followed by supplemental user media", () => {
+		const model = makeCopilotClaudeModel();
+		const messages: Message[] = [
+			{ role: "user", content: "inspect the attachment", timestamp: Date.now() },
+			makeAssistantMessage([
+				{
+					type: "toolCall",
+					id: "call_123|fc_123",
+					name: "read",
+					arguments: { path: "evidence.pdf", pages: "1-5" },
+				},
+			]),
+			{
+				role: "toolResult",
+				toolCallId: "call_123|fc_123",
+				toolName: "read",
+				content: [{ type: "text", text: 'Showing PDF pages 1-5 of 8. Use pages="6-8" to continue.' }],
+				isError: false,
+				timestamp: Date.now(),
+			},
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "supplemental attachment" },
+					{ type: "image", mimeType: "image/png", data: "ZmFrZQ==" },
+				],
+				timestamp: Date.now(),
+			},
+		];
+
+		const result = transformMessages(messages, model, anthropicNormalizeToolCallId);
+		const toolResults = result.filter((message) => message.role === "toolResult");
+
+		expect(toolResults).toHaveLength(1);
+		expect(toolResults[0]).toMatchObject({
+			role: "toolResult",
+			toolCallId: "call_123_fc_123",
+			toolName: "read",
+			isError: false,
+		});
+		expect(
+			toolResults.some(
+				(message) =>
+					message.role === "toolResult" &&
+					message.isError &&
+					message.content.some((block) => block.type === "text" && block.text === "No result provided"),
+			),
+		).toBe(false);
+	});
 });

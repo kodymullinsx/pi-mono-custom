@@ -7,7 +7,13 @@ import { basename, extname } from "path";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
-import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
+import {
+	clipImageCropRegion,
+	formatDimensionNote,
+	getImageDimensions,
+	type ImageCropRegion,
+	resizeImage,
+} from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import {
 	getPDFPageCount,
@@ -23,6 +29,13 @@ import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
+const readRegionSchema = Type.Object({
+	left: Type.Number({ description: "Left edge of the crop region in original image pixels", minimum: 0 }),
+	top: Type.Number({ description: "Top edge of the crop region in original image pixels", minimum: 0 }),
+	width: Type.Number({ description: "Width of the crop region in pixels", exclusiveMinimum: 0 }),
+	height: Type.Number({ description: "Height of the crop region in pixels", exclusiveMinimum: 0 }),
+});
+
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
 	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
@@ -32,6 +45,7 @@ const readSchema = Type.Object({
 			description: `Page range for PDF files (for example "1-5", "3", or "10-20"). Maximum ${PDF_MAX_PAGES_PER_READ} pages per request.`,
 		}),
 	),
+	region: Type.Optional(readRegionSchema),
 });
 
 export type ReadToolInput = Static<typeof readSchema>;
@@ -43,6 +57,9 @@ export interface ReadToolDetails {
 		renderedPages?: number;
 		firstPage?: number;
 		lastPage?: number;
+		rangeSize?: number;
+		previousRange?: string;
+		nextRange?: string;
 	};
 }
 
@@ -73,19 +90,36 @@ export interface ReadToolOptions {
 }
 
 function formatReadCall(
-	args: { path?: string; file_path?: string; offset?: number; limit?: number } | undefined,
+	args:
+		| {
+				path?: string;
+				file_path?: string;
+				offset?: number;
+				limit?: number;
+				pages?: string;
+				region?: ImageCropRegion;
+		  }
+		| undefined,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 ): string {
 	const rawPath = str(args?.file_path ?? args?.path);
 	const path = rawPath !== null ? shortenPath(rawPath) : null;
 	const offset = args?.offset;
 	const limit = args?.limit;
+	const pages = args?.pages;
+	const region = args?.region;
 	const invalidArg = invalidArgText(theme);
 	let pathDisplay = path === null ? invalidArg : path ? theme.fg("accent", path) : theme.fg("toolOutput", "...");
 	if (offset !== undefined || limit !== undefined) {
 		const startLine = offset ?? 1;
 		const endLine = limit !== undefined ? startLine + limit - 1 : "";
 		pathDisplay += theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
+	}
+	if (pages) {
+		pathDisplay += theme.fg("warning", ` pages=${pages}`);
+	}
+	if (region) {
+		pathDisplay += theme.fg("warning", ` region=${region.left},${region.top},${region.width}x${region.height}`);
 	}
 	return `${theme.fg("toolTitle", theme.bold("read"))} ${pathDisplay}`;
 }
@@ -114,6 +148,100 @@ function getRequestedPageCount(range: { firstPage: number; lastPage: number }): 
 
 function buildPdfHeaderNote(pageCount: number | null | undefined): string {
 	return `Read PDF file [application/pdf]${pageCount ? ` (${pageCount} page(s))` : ""}`;
+}
+
+function normalizeReadRegion(region: ImageCropRegion | undefined): ImageCropRegion | undefined {
+	if (!region) {
+		return undefined;
+	}
+	if (
+		!Number.isFinite(region.left) ||
+		!Number.isFinite(region.top) ||
+		!Number.isFinite(region.width) ||
+		!Number.isFinite(region.height)
+	) {
+		throw new Error("Invalid region parameter. Use finite numbers for left, top, width, and height.");
+	}
+	if (region.left < 0 || region.top < 0 || region.width <= 0 || region.height <= 0) {
+		throw new Error("Invalid region parameter. left/top must be >= 0 and width/height must be > 0.");
+	}
+	return region;
+}
+
+function formatPageRange(firstPage: number, lastPage: number): string {
+	return firstPage === lastPage ? `${firstPage}` : `${firstPage}-${lastPage}`;
+}
+
+function buildPdfNavigation(
+	firstPage: number,
+	lastPage: number,
+	pageCount: number | null | undefined,
+): { rangeSize: number; previousRange?: string; nextRange?: string } {
+	const rangeSize = Math.max(1, lastPage - firstPage + 1);
+	if (pageCount === null || pageCount === undefined) {
+		return { rangeSize };
+	}
+
+	const previousRange = firstPage > 1 ? formatPageRange(Math.max(1, firstPage - rangeSize), firstPage - 1) : undefined;
+	const nextRange =
+		lastPage < pageCount ? formatPageRange(lastPage + 1, Math.min(pageCount, lastPage + rangeSize)) : undefined;
+	return { rangeSize, previousRange, nextRange };
+}
+
+function buildPdfReadNote(
+	firstPage: number,
+	lastPage: number,
+	pageCount: number | null | undefined,
+	navigation: { nextRange?: string },
+): string {
+	const range = firstPage === lastPage ? `page ${firstPage}` : `pages ${firstPage}-${lastPage}`;
+	if (pageCount !== null && pageCount !== undefined) {
+		return navigation.nextRange
+			? `Showing PDF ${range} of ${pageCount}. Use pages="${navigation.nextRange}" to continue.`
+			: `Showing PDF ${range} of ${pageCount}.`;
+	}
+	return navigation.nextRange
+		? `Showing PDF ${range}. Use pages="${navigation.nextRange}" to continue.`
+		: `Showing PDF ${range}.`;
+}
+
+async function prepareInlineImageBlock(
+	image: Extract<PromptContentBlock, { type: "image" }>,
+	options: {
+		autoResize: boolean;
+		region?: ImageCropRegion;
+		includeDimensionNote?: boolean;
+	},
+): Promise<{ block?: Extract<PromptContentBlock, { type: "image" }>; dimensionNote?: string }> {
+	if (options.region) {
+		const dimensions = await getImageDimensions(image);
+		if (!dimensions) {
+			return {};
+		}
+		if (!clipImageCropRegion(options.region, dimensions.width, dimensions.height)) {
+			throw new Error("The requested region does not overlap the image bounds.");
+		}
+	}
+
+	if (!options.autoResize && !options.region) {
+		return { block: image };
+	}
+
+	const resized = await resizeImage(image, options.region ? { crop: options.region } : undefined);
+	if (!resized) {
+		return {};
+	}
+
+	return {
+		block: {
+			type: "image",
+			data: resized.data,
+			mimeType: resized.mimeType,
+		},
+		dimensionNote: formatDimensionNote(resized, {
+			includeOriginalDimensions: options.includeDimensionNote,
+		}),
+	};
 }
 
 function formatReadResult(
@@ -158,18 +286,25 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files, images (jpg, png, gif, webp), and PDFs. Images and rendered PDF pages are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large text files and pages for large PDFs.`,
+		description: `Read the contents of a file. Supports text files, images (jpg, png, gif, webp), and PDFs. Images and rendered PDF pages are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large text files, pages for large PDFs, and region for image/PDF crops.`,
 		promptSnippet: "Read file contents",
 		promptGuidelines: ["Use read to examine files instead of cat or sed."],
 		parameters: readSchema,
 		async execute(
 			_toolCallId,
-			{ path, offset, limit, pages }: { path: string; offset?: number; limit?: number; pages?: string },
+			{
+				path,
+				offset,
+				limit,
+				pages,
+				region,
+			}: { path: string; offset?: number; limit?: number; pages?: string; region?: ImageCropRegion },
 			signal?: AbortSignal,
 			_onUpdate?,
 			ctx?,
 		) {
 			const absolutePath = resolveReadPath(path, cwd);
+			const requestedRegion = normalizeReadRegion(region);
 			return new Promise<{ content: PromptContentBlock[]; details: ReadToolDetails | undefined }>(
 				(resolve, reject) => {
 					if (signal?.aborted) {
@@ -235,7 +370,7 @@ export function createReadToolDefinition(
 									);
 								}
 
-								const effectiveRange = pageRange
+								let effectiveRange = pageRange
 									? {
 											firstPage: pageRange.firstPage,
 											lastPage:
@@ -244,8 +379,28 @@ export function createReadToolDefinition(
 													: pageRange.lastPage,
 										}
 									: undefined;
+								if (requestedRegion) {
+									if (!effectiveRange) {
+										if (pageCount === 1) {
+											effectiveRange = { firstPage: 1, lastPage: 1 };
+										} else if (pageCount === null) {
+											throw new Error(
+												'PDF region reads require exactly one page. Use pages="N" when the PDF page count is unavailable.',
+											);
+										} else {
+											throw new Error('PDF region reads require exactly one page. Use pages="N".');
+										}
+									}
+									if (
+										!Number.isFinite(effectiveRange.lastPage) ||
+										effectiveRange.firstPage !== effectiveRange.lastPage
+									) {
+										throw new Error('PDF region reads require exactly one page. Use pages="N".');
+									}
+								}
 
-								if (!effectiveRange && supportsDocuments) {
+								const forceRasterRead = requestedRegion !== undefined;
+								if (!effectiveRange && supportsDocuments && !forceRasterRead) {
 									const pdfResult = await readPDF(absolutePath, { pageCount });
 									if (!pdfResult.success) {
 										throw new Error(pdfResult.error.message);
@@ -262,23 +417,57 @@ export function createReadToolDefinition(
 									];
 									details = { pdf: { pageCount: pageCount ?? undefined } };
 								} else {
-									const imageBlocks = await renderPdfPagesToImageBlocks(absolutePath, {
-										firstPage: effectiveRange?.firstPage,
-										lastPage: effectiveRange?.lastPage,
-										autoResize: autoResizeImages,
-										signal,
-										mtimeMs: fileStats.mtimeMs,
-									});
+									const needsDetailedPageProcessing =
+										requestedRegion !== undefined ||
+										(effectiveRange ? effectiveRange.firstPage === effectiveRange.lastPage : pageCount === 1);
+									let imageBlocks: Array<Extract<PromptContentBlock, { type: "image" }>> = [];
+									let dimensionNote: string | undefined;
+
+									if (needsDetailedPageProcessing) {
+										const rawBlocks = await renderPdfPagesToImageBlocks(absolutePath, {
+											firstPage: effectiveRange?.firstPage,
+											lastPage: effectiveRange?.lastPage,
+											autoResize: false,
+											signal,
+											mtimeMs: fileStats.mtimeMs,
+										});
+
+										for (const rawBlock of rawBlocks) {
+											const preparedBlock = await prepareInlineImageBlock(rawBlock, {
+												autoResize: autoResizeImages,
+												region: requestedRegion,
+												includeDimensionNote: rawBlocks.length === 1,
+											});
+											if (preparedBlock.block) {
+												imageBlocks.push(preparedBlock.block);
+											}
+											if (!dimensionNote && preparedBlock.dimensionNote) {
+												dimensionNote = preparedBlock.dimensionNote;
+											}
+										}
+									} else {
+										imageBlocks = await renderPdfPagesToImageBlocks(absolutePath, {
+											firstPage: effectiveRange?.firstPage,
+											lastPage: effectiveRange?.lastPage,
+											autoResize: autoResizeImages,
+											signal,
+											mtimeMs: fileStats.mtimeMs,
+										});
+									}
 
 									const renderedPageCount = imageBlocks.length;
 									const firstPage = effectiveRange?.firstPage ?? 1;
 									const lastPage =
 										effectiveRange?.lastPage && Number.isFinite(effectiveRange.lastPage)
 											? effectiveRange.lastPage
-											: firstPage + renderedPageCount - 1;
-									let pdfNote = effectiveRange
-										? `Read PDF pages ${firstPage}-${lastPage}`
-										: buildPdfHeaderNote(pageCount);
+											: renderedPageCount > 0
+												? firstPage + renderedPageCount - 1
+												: firstPage;
+									const navigation = buildPdfNavigation(firstPage, lastPage, pageCount);
+									let pdfNote = buildPdfReadNote(firstPage, lastPage, pageCount, navigation);
+									if (dimensionNote) {
+										pdfNote += `\n${dimensionNote}`;
+									}
 									if (renderedPageCount === 0) {
 										pdfNote +=
 											"\n[PDF pages omitted: could not be resized below the inline image size limit.]";
@@ -293,29 +482,37 @@ export function createReadToolDefinition(
 											renderedPages: renderedPageCount,
 											firstPage,
 											lastPage,
+											rangeSize: navigation.rangeSize,
+											previousRange: navigation.previousRange,
+											nextRange: navigation.nextRange,
 										},
 									};
 								}
 							} else if (mimeType) {
+								if (pages !== undefined) {
+									throw new Error("The pages parameter is only valid for PDF files.");
+								}
 								// Read image as binary.
 								const buffer = await ops.readFile(absolutePath);
 								const base64 = buffer.toString("base64");
-								if (autoResizeImages) {
-									// Resize image if needed before sending it back to the model.
-									const resized = await resizeImage({ type: "image", data: base64, mimeType });
-									if (!resized) {
+								if (autoResizeImages || requestedRegion) {
+									const preparedBlock = await prepareInlineImageBlock(
+										{ type: "image", data: base64, mimeType },
+										{
+											autoResize: autoResizeImages,
+											region: requestedRegion,
+											includeDimensionNote: true,
+										},
+									);
+									if (!preparedBlock.block) {
 										let textNote = `Read image file [${mimeType}]\n[Image omitted: could not be resized below the inline image size limit.]`;
 										if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
 										content = [{ type: "text", text: textNote }];
 									} else {
-										const dimensionNote = formatDimensionNote(resized);
-										let textNote = `Read image file [${resized.mimeType}]`;
-										if (dimensionNote) textNote += `\n${dimensionNote}`;
+										let textNote = `Read image file [${preparedBlock.block.mimeType}]`;
+										if (preparedBlock.dimensionNote) textNote += `\n${preparedBlock.dimensionNote}`;
 										if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
-										content = [
-											{ type: "text", text: textNote },
-											{ type: "image", data: resized.data, mimeType: resized.mimeType },
-										];
+										content = [{ type: "text", text: textNote }, preparedBlock.block];
 									}
 								} else {
 									let textNote = `Read image file [${mimeType}]`;
@@ -326,6 +523,12 @@ export function createReadToolDefinition(
 									];
 								}
 							} else {
+								if (pages !== undefined) {
+									throw new Error("The pages parameter is only valid for PDF files.");
+								}
+								if (requestedRegion) {
+									throw new Error("The region parameter is only valid for images and PDFs.");
+								}
 								// Read text content.
 								const buffer = await ops.readFile(absolutePath);
 								const textContent = buffer.toString("utf-8");

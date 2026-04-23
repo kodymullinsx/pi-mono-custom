@@ -20,6 +20,7 @@
 ## Commands
 
 - After code changes (not documentation changes): `npm run check` (get full output, no tail). Fix all errors, warnings, and infos before committing.
+- If you need non-mutating validation first, use `npx tsgo --noEmit` plus specific tests from the package root. Repo-root `npm run check` runs `biome check --write` and will modify files.
 - Note: `npm run check` does not run tests.
 - NEVER run: `npm run dev`, `npm run build`, `npm test`
 - Only run specific tests if user instructs: `npx tsx ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts`

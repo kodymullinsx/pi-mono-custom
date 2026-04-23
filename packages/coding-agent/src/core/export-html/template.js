@@ -558,11 +558,24 @@
             const path = shortenPath(String(args.path || args.file_path || ''));
             const offset = args.offset;
             const limit = args.limit;
+            const pages = typeof args.pages === 'string' ? args.pages : undefined;
+            const region = typeof args.region === 'object' && args.region !== null ? args.region : undefined;
             let display = path;
             if (offset !== undefined || limit !== undefined) {
               const start = offset ?? 1;
               const end = limit !== undefined ? start + limit - 1 : '';
               display += `:${start}${end ? `-${end}` : ''}`;
+            }
+            if (pages) {
+              display += ` pages=${pages}`;
+            }
+            if (
+              typeof region?.left === 'number' &&
+              typeof region?.top === 'number' &&
+              typeof region?.width === 'number' &&
+              typeof region?.height === 'number'
+            ) {
+              display += ` region=${region.left},${region.top},${region.width}x${region.height}`;
             }
             return `[read: ${display}]`;
           }
