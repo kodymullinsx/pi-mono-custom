@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [0.70.2] - 2026-04-24
+
+## [0.70.1] - 2026-04-24
+
+## [0.70.0] - 2026-04-23
+
+## [0.69.0] - 2026-04-22
+
+### Breaking Changes
+
+- Migrated public TypeBox-facing types and examples from `@sinclair/typebox` 0.34.x to `typebox` 1.x. Install and import from `typebox` instead of relying on `@sinclair/typebox` transitively ([#3112](https://github.com/badlogic/pi-mono/issues/3112))
 
 ### Added
 

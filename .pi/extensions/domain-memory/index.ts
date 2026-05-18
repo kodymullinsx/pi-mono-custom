@@ -7,18 +7,19 @@
  * - Uses CWD to choose memory tree on each prompt
  * - `~/work/*` -> inject work index only
  * - all other paths -> attempt semantic routing against `~/projects/Memory/`
- * - on confident match -> inject matched `memory.md` + scoped `_index.md`
+ * - on high-confidence match -> inject matched `memory.md` + scoped `_index.md`
+ * - suppress repeated matched injections when the routed content fingerprint is unchanged
  * - on router failure or no match -> inject scoped `_index.md` only
  * - Regenerates `_index.md` when a `memory.md` is written or edited
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@mariozechner/pi-coding-agent";
 import { generateMemoryIndex } from "../../lib/memory-schema/index.ts";
-import { shouldBypassAttachmentRouting } from "./routing-helpers.ts";
 
 const HOME = homedir();
 const INSTALL_HOME = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../../");
@@ -50,6 +51,9 @@ const SERVER_TIMEOUT_MS = 2000;
 const TOKEN_CAP = 2000;
 const WORDS_PER_TOKEN = 0.75;
 const INDEX_TRUNCATED_MARKER = "[domain-memory: index-truncated]";
+const DOMAIN_MEMORY_STATE_TYPE = "domain-memory-state";
+const DEFAULT_MIN_INJECT_CONFIDENCE = 0.4;
+const MIN_INJECT_CONFIDENCE = loadMinInjectConfidence();
 
 type Scope = "personal" | "work";
 
@@ -70,12 +74,21 @@ type FileReadResult = {
 	errorReason: "missing" | "unreadable" | "empty" | null;
 };
 
+type BuiltContext = {
+	context: string;
+	injectionFingerprint: string | null;
+};
+
 type IndexRegenerationResult =
 	| { status: "skipped" | "updated" | "unchanged" }
 	| { status: "failed"; message: string };
 
+type SessionInjectionState = {
+	lastInjectionFingerprint: string | null;
+};
+
 const reportedG1DegradedSessions = new Set<string>();
-const reportedAttachmentBypassSessions = new Set<string>();
+const sessionInjectionStates = new Map<string, SessionInjectionState>();
 
 function logWithLevel(level: "warn" | "error", message: string, error?: unknown): void {
 	const ts = new Date().toISOString();
@@ -101,6 +114,21 @@ function logWarning(message: string, error?: unknown): void {
 
 function logError(message: string, error?: unknown): void {
 	logWithLevel("error", message, error);
+}
+
+function loadMinInjectConfidence(): number {
+	const raw = process.env.DOMAIN_MEMORY__min_inject_confidence;
+	if (raw == null || raw.trim() === "") return DEFAULT_MIN_INJECT_CONFIDENCE;
+
+	const parsed = Number.parseFloat(raw);
+	if (!Number.isFinite(parsed)) {
+		logWarning(
+			`invalid DOMAIN_MEMORY__min_inject_confidence=${JSON.stringify(raw)}; using ${DEFAULT_MIN_INJECT_CONFIDENCE.toFixed(2)}`,
+		);
+		return DEFAULT_MIN_INJECT_CONFIDENCE;
+	}
+
+	return Math.min(1, Math.max(0, parsed));
 }
 
 function loadG1NegativePatterns(): { patterns: RegExp[]; errorReason: string | null } {
@@ -171,7 +199,7 @@ function reportDomainMemoryMessage(
 	logWarning(message);
 }
 
-function getSessionNoticeKey(ctx: ExtensionContext): string {
+function getSessionKey(ctx: ExtensionContext): string {
 	const sessionFile = ctx.sessionManager?.getSessionFile?.();
 	if (typeof sessionFile === "string" && sessionFile.length > 0) return sessionFile;
 	const sessionId = ctx.sessionManager?.getSessionId?.();
@@ -181,23 +209,12 @@ function getSessionNoticeKey(ctx: ExtensionContext): string {
 
 function reportG1DegradedModeOnce(ctx: ExtensionContext): void {
 	if (!G1_LOAD_ERROR) return;
-	const key = getSessionNoticeKey(ctx);
+	const key = getSessionKey(ctx);
 	if (reportedG1DegradedSessions.has(key)) return;
 	reportedG1DegradedSessions.add(key);
 	reportDomainMemoryMessage(
 		ctx,
 		"Domain memory intent gate is unavailable, so semantic routing is running in fail-open mode for this session.",
-		"warning",
-	);
-}
-
-function reportAttachmentBypassOnce(ctx: ExtensionContext): void {
-	const key = getSessionNoticeKey(ctx);
-	if (reportedAttachmentBypassSessions.has(key)) return;
-	reportedAttachmentBypassSessions.add(key);
-	reportDomainMemoryMessage(
-		ctx,
-		"Domain memory semantic routing was bypassed for this attachment-heavy turn, so only the memory index was injected.",
 		"warning",
 	);
 }
@@ -254,42 +271,6 @@ function renderContext(header: string, domainContent: string | null, indexConten
 	const remainingTokens = TOKEN_CAP - countTokensApprox(base);
 	const trimmedIndex = trimIndexToBudget(indexContent, remainingTokens);
 	return trimmedIndex ? `${base}\n\n${trimmedIndex}` : base;
-}
-
-function getScopeInfo(scope: Scope): {
-	memoryRoot: string;
-	indexPath: string;
-	rootLabel: string;
-	scopeLabel: string;
-} {
-	return scope === "work"
-		? {
-				memoryRoot: WORK_MEMORY_ROOT,
-				indexPath: WORK_INDEX,
-				rootLabel: "~/work/Memory",
-				scopeLabel: "work",
-			}
-		: {
-				memoryRoot: PROJECTS_MEMORY_ROOT,
-				indexPath: PROJECTS_INDEX,
-				rootLabel: "~/projects/Memory",
-				scopeLabel: "personal + projects",
-			};
-}
-
-async function buildScopeIndexOnlyContext(scope: Scope, reason: string): Promise<string> {
-	const { indexPath, rootLabel, scopeLabel } = getScopeInfo(scope);
-	const indexRead = readFileWithStatus(indexPath);
-	if (indexRead.errorReason) {
-		const unavailableReason =
-			indexRead.errorReason === "missing"
-				? "index-missing"
-				: indexRead.errorReason === "empty"
-					? "index-empty"
-					: "index-unreadable";
-		return buildUnavailableContext(scopeLabel, rootLabel, unavailableReason);
-	}
-	return buildIndexOnlyContext(scopeLabel, rootLabel, indexRead.content, reason);
 }
 
 function isNumber(value: unknown): value is number {
@@ -430,31 +411,114 @@ function isWithinRoot(rootPath: string, targetPath: string): boolean {
 	return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
 }
 
-function buildIndexOnlyContext(scopeLabel: string, rootLabel: string, indexContent: string, reason: string): string {
+function createContextFingerprint(cwd: string, context: string): string {
+	return createHash("sha256").update(cwd).update("\0").update(context).digest("hex");
+}
+
+function buildIndexOnlyContext(scopeLabel: string, rootLabel: string, indexContent: string, reason: string, cwd: string): BuiltContext {
 	const header =
 		`[domain-memory: index-fallback reason=${reason}]\n` +
 		`Domain memory available (${scopeLabel}). Root: ${rootLabel}`;
-	return renderContext(header, null, indexContent);
+	const context = renderContext(header, null, indexContent);
+	return { context, injectionFingerprint: createContextFingerprint(normalizePath(cwd), context) };
 }
 
-function buildUnavailableContext(scopeLabel: string, rootLabel: string, reason: string): string {
-	return (
+function buildUnavailableContext(scopeLabel: string, rootLabel: string, reason: string, cwd: string): BuiltContext {
+	const context =
 		`[domain-memory: unavailable reason=${reason}]\n` +
-		`Domain memory unavailable (${scopeLabel}). Root: ${rootLabel}`
-	);
+		`Domain memory unavailable (${scopeLabel}). Root: ${rootLabel}`;
+	return { context, injectionFingerprint: createContextFingerprint(normalizePath(cwd), context) };
 }
 
-function buildMatchedContext(scopeLabel: string, rootLabel: string, result: RouteResponse, domainContent: string, indexContent: string): string {
+function isConfidentInjectionMatch(result: RouteResponse): boolean {
+	return result.confidence >= Math.max(result.threshold, MIN_INJECT_CONFIDENCE);
+}
+
+function createInjectionFingerprint(
+	scope: Scope,
+	cwd: string,
+	result: RouteResponse,
+	domainPath: string,
+	domainContent: string,
+): string {
+	return createHash("sha256")
+		.update(scope)
+		.update("\0")
+		.update(cwd)
+		.update("\0")
+		.update(result.domain_id ?? "")
+		.update("\0")
+		.update(domainPath)
+		.update("\0")
+		.update(domainContent)
+		.digest("hex");
+}
+
+function buildMatchedContext(
+	scope: Scope,
+	cwd: string,
+	scopeLabel: string,
+	rootLabel: string,
+	result: RouteResponse,
+	domainPath: string,
+	domainContent: string,
+	indexContent: string,
+): BuiltContext {
 	const header =
 		`[domain-memory: matched-injected domain_id=${result.domain_id}]\n` +
 		`Domain memory (${scopeLabel}). Root: ${rootLabel}\n` +
 		`Semantic match: ${result.domain_id} ` +
 		`(confidence: ${result.confidence.toFixed(3)}, backend: ${result.backend}, model: ${result.model})`;
-	return renderContext(header, domainContent, indexContent);
+	return {
+		context: renderContext(header, domainContent, indexContent),
+		injectionFingerprint: createInjectionFingerprint(scope, cwd, result, domainPath, domainContent),
+	};
 }
 
-async function buildScopedContext(prompt: string, scope: Scope, signal?: AbortSignal): Promise<string> {
-	const { memoryRoot, indexPath, rootLabel, scopeLabel } = getScopeInfo(scope);
+function loadPersistedInjectionState(ctx: ExtensionContext): SessionInjectionState | null {
+	let state: SessionInjectionState | null = null;
+	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type !== "custom" || entry.customType !== DOMAIN_MEMORY_STATE_TYPE) continue;
+		const data = entry.data as SessionInjectionState | undefined;
+		if (!data) continue;
+		state = {
+			lastInjectionFingerprint:
+				typeof data.lastInjectionFingerprint === "string" && data.lastInjectionFingerprint.length > 0
+					? data.lastInjectionFingerprint
+					: null,
+		};
+	}
+	return state;
+}
+
+function getLastInjectionFingerprint(ctx: ExtensionContext): string | null {
+	const key = getSessionKey(ctx);
+	const cached = sessionInjectionStates.get(key);
+	if (cached) return cached.lastInjectionFingerprint;
+
+	const persisted = loadPersistedInjectionState(ctx);
+	if (!persisted) return null;
+	sessionInjectionStates.set(key, persisted);
+	return persisted.lastInjectionFingerprint;
+}
+
+function rememberInjectionFingerprint(ctx: ExtensionContext, pi: ExtensionAPI, fingerprint: string | null): void {
+	const key = getSessionKey(ctx);
+	const state: SessionInjectionState = { lastInjectionFingerprint: fingerprint };
+	sessionInjectionStates.set(key, state);
+	pi.appendEntry(DOMAIN_MEMORY_STATE_TYPE, state);
+}
+
+function clearInjectionFingerprint(ctx: ExtensionContext, pi: ExtensionAPI): void {
+	if (getLastInjectionFingerprint(ctx) == null) return;
+	rememberInjectionFingerprint(ctx, pi, null);
+}
+
+async function buildScopedContext(prompt: string, scope: Scope, cwd: string, signal?: AbortSignal): Promise<BuiltContext> {
+	const memoryRoot = scope === "work" ? WORK_MEMORY_ROOT : PROJECTS_MEMORY_ROOT;
+	const indexPath = scope === "work" ? WORK_INDEX : PROJECTS_INDEX;
+	const rootLabel = scope === "work" ? "~/work/Memory" : "~/projects/Memory";
+	const scopeLabel = scope === "work" ? "work" : "personal + projects";
 	const indexRead = readFileWithStatus(indexPath);
 	if (indexRead.errorReason) {
 		const reason =
@@ -463,33 +527,33 @@ async function buildScopedContext(prompt: string, scope: Scope, signal?: AbortSi
 				: indexRead.errorReason === "empty"
 					? "index-empty"
 					: "index-unreadable";
-		return buildUnavailableContext(scopeLabel, rootLabel, reason);
+		return buildUnavailableContext(scopeLabel, rootLabel, reason, cwd);
 	}
 	const indexContent = indexRead.content;
 
 	if (scope === "work") {
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "work-bypass");
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "work-bypass", cwd);
 	}
 	if (!prompt) {
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "no-prompt");
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "no-prompt", cwd);
 	}
 	const gateDecision = checkIntentGateG1(prompt);
 	if (!gateDecision.shouldRoute) {
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "gate-blocked");
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "gate-blocked", cwd);
 	}
 
 	const { result, errorReason } = await callRouter(prompt, scope, signal);
 	if (errorReason) {
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, errorReason);
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, errorReason, cwd);
 	}
 	if (!result || !result.matched) {
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "no-match");
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "no-match", cwd);
 	}
 	if (!isAllowedDomain(scope, result.domain_id ?? "")) {
 		logWarning(
 			`router returned disallowed domain scope=${scope} domain_id=${result.domain_id ?? "null"} path=${result.path ?? "null"}`,
 		);
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "unsafe-path");
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "unsafe-path", cwd);
 	}
 
 	const domainPath = resolveDomainMemoryPath(memoryRoot, result.domain_id ?? "", result.path);
@@ -497,7 +561,7 @@ async function buildScopedContext(prompt: string, scope: Scope, signal?: AbortSi
 		logWarning(
 			`router resolved path outside memory root scope=${scope} domain_id=${result.domain_id ?? "null"} returnedPath=${result.path ?? "null"} resolvedPath=${domainPath}`,
 		);
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "unsafe-path");
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, "unsafe-path", cwd);
 	}
 
 	const domainRead = readFileWithStatus(domainPath, 100);
@@ -511,10 +575,14 @@ async function buildScopedContext(prompt: string, scope: Scope, signal?: AbortSi
 				: domainRead.errorReason === "empty"
 					? "domain-empty"
 					: "domain-unreadable";
-		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, reason);
+		return buildIndexOnlyContext(scopeLabel, rootLabel, indexContent, reason, cwd);
 	}
 
-	return buildMatchedContext(scopeLabel, rootLabel, result, domainRead.content, indexContent);
+	if (!isConfidentInjectionMatch(result)) {
+		return { context: "", injectionFingerprint: null };
+	}
+
+	return buildMatchedContext(scope, normalizePath(cwd), scopeLabel, rootLabel, result, domainPath, domainRead.content, indexContent);
 }
 
 // --- Shared index regeneration ---
@@ -554,29 +622,35 @@ function regenIndexIfNeeded(filePath: string): IndexRegenerationResult {
 // --- Extension entry point ---
 
 export default function domainMemoryExtension(pi: ExtensionAPI): void {
+	pi.on("session_start", (_event, ctx) => {
+		const key = getSessionKey(ctx);
+		const persisted = loadPersistedInjectionState(ctx);
+		if (persisted) {
+			sessionInjectionStates.set(key, persisted);
+			return;
+		}
+		sessionInjectionStates.delete(key);
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		const cwd = ctx.cwd;
-		let context = "";
-		const prompt = event.prompt ?? "";
-		const bypassAttachmentRouting = shouldBypassAttachmentRouting({
-			prompt,
-			cwd,
-			attachments: event.attachments,
-		});
+		let builtContext: BuiltContext = { context: "", injectionFingerprint: null };
 
 		if (isWithinRoot(join(HOME, "work"), cwd)) {
-			context = await buildScopedContext(prompt, "work", ctx.signal);
+			builtContext = await buildScopedContext(event.prompt ?? "", "work", cwd, ctx.signal);
 		} else {
 			reportG1DegradedModeOnce(ctx);
-			if (bypassAttachmentRouting) {
-				reportAttachmentBypassOnce(ctx);
-			}
-			context = bypassAttachmentRouting
-				? await buildScopeIndexOnlyContext("personal", "attachment-bypass")
-				: await buildScopedContext(prompt, "personal", ctx.signal);
+			builtContext = await buildScopedContext(event.prompt ?? "", "personal", cwd, ctx.signal);
 		}
 
-		if (!context) return;
+		const { context, injectionFingerprint } = builtContext;
+		if (!context) {
+			clearInjectionFingerprint(ctx, pi);
+			return;
+		}
+		const previousFingerprint = getLastInjectionFingerprint(ctx);
+		if (previousFingerprint === injectionFingerprint) return;
+		rememberInjectionFingerprint(ctx, pi, injectionFingerprint);
 		return { systemPrompt: `${event.systemPrompt}\n\n${context}` };
 	});
 

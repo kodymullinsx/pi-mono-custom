@@ -379,14 +379,13 @@ async function executeToolCallsSequential(
 	const toolResults: ToolResultMessage[] = [];
 
 	for (const toolCall of toolCalls) {
+		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
-			args: toolCall.arguments,
+			args: preparation.kind === "prepared" ? preparation.args : toolCall.arguments,
 		});
-
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		let finalized: FinalizedToolCallOutcome;
 		if (preparation.kind === "immediate") {
 			finalized = {
@@ -436,14 +435,13 @@ async function executeToolCallsParallel(
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
 	for (const toolCall of toolCalls) {
+		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
-			args: toolCall.arguments,
+			args: preparation.kind === "prepared" ? preparation.args : toolCall.arguments,
 		});
-
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
 			const finalized = {
 				toolCall,
@@ -574,6 +572,9 @@ async function prepareToolCall(
 				};
 			}
 		}
+		// Keep downstream execution and history views aligned with any argument normalization
+		// applied in beforeToolCall (for example pages="next" -> pages="11-13").
+		toolCall.arguments = validatedArgs as Record<string, unknown>;
 		return {
 			kind: "prepared",
 			toolCall,

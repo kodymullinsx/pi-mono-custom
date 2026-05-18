@@ -7,6 +7,7 @@
     "extensions": [
       "./ast-grep",
       "./auto-commit",
+      "./background-computer-use",
       "./buddy",
       "./compact-tool-renderer",
       "./context-viewer",

@@ -14,8 +14,20 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const oauthTokens = await Promise.all([resolveApiKey("github-copilot"), resolveApiKey("openai-codex")]);
-const [githubCopilotToken, openaiCodexToken] = oauthTokens;
+const liveResponsesToolResultImagesE2E = process.env.PI_LIVE_RESPONSES_TOOL_RESULT_IMAGES_E2E === "1";
+const liveImageToolResultE2E = process.env.PI_LIVE_IMAGE_TOOL_RESULT_E2E === "1";
+const liveOpenAICodexImageToolE2E = process.env.PI_LIVE_OPENAI_CODEX_IMAGE_TOOL_E2E === "1";
+const runResponsesToolResultImagesE2E = liveResponsesToolResultImagesE2E || liveImageToolResultE2E;
+const runOpenAICodexImageToolE2E =
+	liveOpenAICodexImageToolE2E || liveResponsesToolResultImagesE2E || liveImageToolResultE2E;
+
+async function resolveRequiredApiKey(provider: string): Promise<string> {
+	const token = await resolveApiKey(provider);
+	if (!token) {
+		throw new Error(`Live tool-result image testing is enabled but no ${provider} credential was found`);
+	}
+	return token;
+}
 
 const getImageSchema = Type.Object({});
 const getImageTool: Tool<typeof getImageSchema> = {
@@ -150,51 +162,51 @@ async function verifyToolResultImagesStayInFunctionCallOutput<TApi extends Api>(
 }
 
 describe("Responses API tool result images", () => {
-	describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI Responses Provider (gpt-5-mini)", () => {
-		const model = getModel("openai", "gpt-5-mini");
+	describe.skipIf(!runResponsesToolResultImagesE2E || !process.env.OPENAI_API_KEY)(
+		"OpenAI Responses Provider (gpt-5-mini)",
+		() => {
+			const model = getModel("openai", "gpt-5-mini");
 
-		it("should send tool result images in function_call_output", { retry: 3, timeout: 30000 }, async () => {
-			await verifyToolResultImagesStayInFunctionCallOutput(model, { reasoningEffort: "low" });
-		});
-	});
+			it("should send tool result images in function_call_output", { retry: 3, timeout: 30000 }, async () => {
+				await verifyToolResultImagesStayInFunctionCallOutput(model, { reasoningEffort: "low" });
+			});
+		},
+	);
 
-	describe.skipIf(!hasAzureOpenAICredentials())("Azure OpenAI Responses Provider (gpt-4o-mini)", () => {
-		const model = getModel("azure-openai-responses", "gpt-4o-mini");
-		const azureDeploymentName = resolveAzureDeploymentName(model.id);
-		const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
+	describe.skipIf(!runResponsesToolResultImagesE2E || !hasAzureOpenAICredentials())(
+		"Azure OpenAI Responses Provider (gpt-4o-mini)",
+		() => {
+			const model = getModel("azure-openai-responses", "gpt-4o-mini");
+			const azureDeploymentName = resolveAzureDeploymentName(model.id);
+			const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
 
-		it("should send tool result images in function_call_output", { retry: 3, timeout: 30000 }, async () => {
-			await verifyToolResultImagesStayInFunctionCallOutput(model, azureOptions);
-		});
-	});
+			it("should send tool result images in function_call_output", { retry: 3, timeout: 30000 }, async () => {
+				await verifyToolResultImagesStayInFunctionCallOutput(model, azureOptions);
+			});
+		},
+	);
 
-	describe("GitHub Copilot Responses Provider (gpt-5-mini)", () => {
+	describe.skipIf(!liveImageToolResultE2E)("GitHub Copilot Responses Provider (gpt-5-mini)", () => {
 		const model = getModel("github-copilot", "gpt-5-mini");
 
-		it.skipIf(!githubCopilotToken)(
-			"should send tool result images in function_call_output",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await verifyToolResultImagesStayInFunctionCallOutput(model, {
-					apiKey: githubCopilotToken,
-					reasoningEffort: "low",
-				});
-			},
-		);
+		it("should send tool result images in function_call_output", { retry: 3, timeout: 30000 }, async () => {
+			const apiKey = await resolveRequiredApiKey("github-copilot");
+			await verifyToolResultImagesStayInFunctionCallOutput(model, {
+				apiKey,
+				reasoningEffort: "low",
+			});
+		});
 	});
 
-	describe("OpenAI Codex Responses Provider (gpt-5.2-codex)", () => {
-		const model = getModel("openai-codex", "gpt-5.2-codex");
+	describe.skipIf(!runOpenAICodexImageToolE2E)("OpenAI Codex Responses Provider (gpt-5.5)", () => {
+		const model = getModel("openai-codex", "gpt-5.5");
 
-		it.skipIf(!openaiCodexToken)(
-			"should send tool result images in function_call_output",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await verifyToolResultImagesStayInFunctionCallOutput(model, {
-					apiKey: openaiCodexToken,
-					reasoningEffort: "low",
-				});
-			},
-		);
+		it("should send tool result images in function_call_output", { retry: 0, timeout: 60000 }, async () => {
+			const apiKey = await resolveRequiredApiKey("openai-codex");
+			await verifyToolResultImagesStayInFunctionCallOutput(model, {
+				apiKey,
+				reasoningEffort: "low",
+			});
+		});
 	});
 });

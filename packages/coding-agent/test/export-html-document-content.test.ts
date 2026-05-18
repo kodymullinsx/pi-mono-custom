@@ -20,5 +20,11 @@ describe("export HTML document content rendering", () => {
 		expect(templateJs).toMatch(
 			/region=\$\{region\.left\},\$\{region\.top\},\$\{region\.width\}x\$\{region\.height\}/,
 		);
+		expect(templateJs).toMatch(
+			/const regionNorm = typeof args\.regionNorm === 'object' && args\.regionNorm !== null \? args\.regionNorm : undefined;/,
+		);
+		expect(templateJs).toMatch(
+			/regionNorm=\$\{regionNorm\.left\},\$\{regionNorm\.top\},\$\{regionNorm\.width\}x\$\{regionNorm\.height\}/,
+		);
 	});
 });

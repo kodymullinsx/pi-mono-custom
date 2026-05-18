@@ -33,10 +33,10 @@ import type {
 	TextContent,
 } from "@mariozechner/pi-ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
-import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
+import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
 import {
 	type CompactionResult,
@@ -248,6 +248,15 @@ type ReadFileStateEntry = {
 	offset?: number;
 	limit?: number;
 	regionKey?: string;
+	regionNormKey?: string;
+};
+
+type PdfReadStateEntry = {
+	mtimeMs: number;
+	firstPage: number;
+	lastPage: number;
+	rangeSize: number;
+	pageCount?: number;
 };
 
 type AttachmentRetryTarget = "document" | "image";
@@ -294,6 +303,8 @@ export class AgentSession {
 	private _retryPromise: Promise<void> | undefined = undefined;
 	private _retryResolve: (() => void) | undefined = undefined;
 	private _readFileState = new Map<string, ReadFileStateEntry>();
+	private _pdfReadState = new Map<string, PdfReadStateEntry>();
+	private _pendingPdfWindowSizes = new Map<string, number>();
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
@@ -368,6 +379,9 @@ export class AgentSession {
 	}> {
 		const result = await this._modelRegistry.getApiKeyAndHeaders(model);
 		if (!result.ok) {
+			if (result.error.startsWith("No API key found")) {
+				throw new Error(formatNoApiKeyFoundMessage(model.provider));
+			}
 			throw new Error(result.error);
 		}
 		if (result.apiKey) {
@@ -382,10 +396,7 @@ export class AgentSession {
 					`Run '/login ${model.provider}' to re-authenticate.`,
 			);
 		}
-		throw new Error(
-			`No API key found for ${model.provider}.\n\n` +
-				`Use /login or set an API key environment variable. See ${join(getDocsPath(), "providers.md")}`,
-		);
+		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
 	/**
@@ -399,25 +410,28 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_call")) {
-				return undefined;
-			}
+			if (runner.hasHandlers("tool_call")) {
+				await this._agentEventQueue;
 
-			await this._agentEventQueue;
-
-			try {
-				return await runner.emitToolCall({
-					type: "tool_call",
-					toolName: toolCall.name,
-					toolCallId: toolCall.id,
-					input: args as Record<string, unknown>,
-				});
-			} catch (err) {
-				if (err instanceof Error) {
-					throw err;
+				try {
+					const runnerResult = await runner.emitToolCall({
+						type: "tool_call",
+						toolName: toolCall.name,
+						toolCallId: toolCall.id,
+						input: args as Record<string, unknown>,
+					});
+					if (runnerResult?.block) {
+						return runnerResult;
+					}
+				} catch (err) {
+					if (err instanceof Error) {
+						throw err;
+					}
+					throw new Error(`Extension failed, blocking execution: ${String(err)}`);
 				}
-				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
 			}
+
+			return this._normalizeReadToolArgs(toolCall.id, args);
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
@@ -473,11 +487,17 @@ export class AgentSession {
 		newMessages: AgentMessage[] | undefined;
 		isError: boolean;
 	}> {
-		if (toolName !== "read" || isError) {
+		if (toolName !== "read") {
+			return { content, details, newMessages, isError };
+		}
+
+		if (isError) {
+			this._pendingPdfWindowSizes.delete(toolCallId);
 			return { content, details, newMessages, isError };
 		}
 
 		const { textBlocks, attachmentBlocks } = this._splitAttachmentBlocks(content);
+		await this._updatePdfReadState(toolCallId, args, details);
 		if (attachmentBlocks.length > 0) {
 			return {
 				content:
@@ -546,6 +566,9 @@ export class AgentSession {
 				regionKey: request.region
 					? `${request.region.left},${request.region.top},${request.region.width},${request.region.height}`
 					: undefined,
+				regionNormKey: request.regionNorm
+					? `${request.regionNorm.left},${request.regionNorm.top},${request.regionNorm.width},${request.regionNorm.height}`
+					: undefined,
 			};
 			const previousState = this._readFileState.get(request.absolutePath);
 			this._readFileState.set(request.absolutePath, nextState);
@@ -555,7 +578,8 @@ export class AgentSession {
 				previousState.mtimeMs === nextState.mtimeMs &&
 				previousState.offset === nextState.offset &&
 				previousState.limit === nextState.limit &&
-				previousState.regionKey === nextState.regionKey
+				previousState.regionKey === nextState.regionKey &&
+				previousState.regionNormKey === nextState.regionNormKey
 			) {
 				return [{ type: "text", text: FILE_UNCHANGED_TEXT }];
 			}
@@ -577,6 +601,12 @@ export class AgentSession {
 			width: number;
 			height: number;
 		};
+		regionNorm?: {
+			left: number;
+			top: number;
+			width: number;
+			height: number;
+		};
 	} {
 		if (!args || typeof args !== "object") {
 			return {};
@@ -589,6 +619,7 @@ export class AgentSession {
 			limit?: unknown;
 			pages?: unknown;
 			region?: unknown;
+			regionNorm?: unknown;
 		};
 		const rawPath =
 			typeof input.path === "string"
@@ -619,7 +650,157 @@ export class AgentSession {
 							height: (input.region as { height: number }).height,
 						}
 					: undefined,
+			regionNorm:
+				typeof input.regionNorm === "object" &&
+				input.regionNorm !== null &&
+				typeof (input.regionNorm as { left?: unknown }).left === "number" &&
+				typeof (input.regionNorm as { top?: unknown }).top === "number" &&
+				typeof (input.regionNorm as { width?: unknown }).width === "number" &&
+				typeof (input.regionNorm as { height?: unknown }).height === "number"
+					? {
+							left: (input.regionNorm as { left: number }).left,
+							top: (input.regionNorm as { top: number }).top,
+							width: (input.regionNorm as { width: number }).width,
+							height: (input.regionNorm as { height: number }).height,
+						}
+					: undefined,
 		};
+	}
+
+	private _formatPdfPageRange(firstPage: number, lastPage: number): string {
+		return firstPage === lastPage ? `${firstPage}` : `${firstPage}-${lastPage}`;
+	}
+
+	private _getExplicitPdfRangeSize(pages: string | undefined): number | undefined {
+		if (!pages || !/^\d+(?:-\d+)?$/.test(pages.trim())) {
+			return undefined;
+		}
+
+		const [first, last] = pages
+			.trim()
+			.split("-")
+			.map((value) => Number.parseInt(value, 10));
+		if (!Number.isFinite(first)) {
+			return undefined;
+		}
+		return Number.isFinite(last) ? Math.max(1, last - first + 1) : 1;
+	}
+
+	private async _normalizeReadToolArgs(
+		toolCallId: string,
+		args: unknown,
+	): Promise<{ block?: boolean; reason?: string } | undefined> {
+		const request = this._extractReadRequest(args);
+		if (!request.absolutePath || !request.pages || typeof args !== "object" || args === null) {
+			return undefined;
+		}
+
+		const normalizedAlias = request.pages.trim().toLowerCase();
+		if (normalizedAlias !== "next" && normalizedAlias !== "prev") {
+			return undefined;
+		}
+
+		const previousState = this._pdfReadState.get(request.absolutePath);
+		if (!previousState) {
+			return {
+				block: true,
+				reason:
+					'No prior PDF range is available for pages="next"/"prev". Start with read(path) or an explicit pages="N-M" range first.',
+			};
+		}
+
+		try {
+			const stats = await fsStat(request.absolutePath);
+			if (stats.mtimeMs !== previousState.mtimeMs) {
+				this._pdfReadState.delete(request.absolutePath);
+				return {
+					block: true,
+					reason:
+						'The PDF changed since the last paged read. Start again with read(path) or an explicit pages="N-M" range before using pages="next"/"prev".',
+				};
+			}
+		} catch (error) {
+			this._pdfReadState.delete(request.absolutePath);
+			const message = error instanceof Error ? error.message : String(error);
+			return {
+				block: true,
+				reason: `Could not revalidate the prior PDF range for pages="next"/"prev": ${message}. Start again with read(path) or an explicit pages="N-M" range.`,
+			};
+		}
+
+		let firstPage: number;
+		let lastPage: number;
+		if (normalizedAlias === "next") {
+			firstPage = previousState.lastPage + 1;
+			if (previousState.pageCount !== undefined && firstPage > previousState.pageCount) {
+				return {
+					block: true,
+					reason: `Already at the end of the PDF. Last available range is ${this._formatPdfPageRange(previousState.firstPage, previousState.lastPage)}.`,
+				};
+			}
+			lastPage =
+				previousState.pageCount !== undefined
+					? Math.min(previousState.pageCount, firstPage + previousState.rangeSize - 1)
+					: firstPage + previousState.rangeSize - 1;
+		} else {
+			lastPage = previousState.firstPage - 1;
+			if (lastPage < 1) {
+				return {
+					block: true,
+					reason: `Already at the beginning of the PDF. Earliest available range is ${this._formatPdfPageRange(previousState.firstPage, previousState.lastPage)}.`,
+				};
+			}
+			firstPage = Math.max(1, lastPage - previousState.rangeSize + 1);
+		}
+
+		this._pendingPdfWindowSizes.set(toolCallId, previousState.rangeSize);
+		(args as { pages?: unknown }).pages = this._formatPdfPageRange(firstPage, lastPage);
+		return undefined;
+	}
+
+	private async _updatePdfReadState(toolCallId: string, args: unknown, details: unknown): Promise<void> {
+		const pendingWindowSize = this._pendingPdfWindowSizes.get(toolCallId);
+		this._pendingPdfWindowSizes.delete(toolCallId);
+		const request = this._extractReadRequest(args);
+		if (!request.absolutePath) {
+			return;
+		}
+
+		const pdfDetails =
+			typeof details === "object" &&
+			details !== null &&
+			"pdf" in details &&
+			typeof (details as { pdf?: unknown }).pdf === "object" &&
+			(details as { pdf?: unknown }).pdf !== null
+				? (
+						details as {
+							pdf: { firstPage?: unknown; lastPage?: unknown; rangeSize?: unknown; pageCount?: unknown };
+						}
+					).pdf
+				: undefined;
+		if (
+			!pdfDetails ||
+			typeof pdfDetails.firstPage !== "number" ||
+			typeof pdfDetails.lastPage !== "number" ||
+			typeof pdfDetails.rangeSize !== "number"
+		) {
+			return;
+		}
+
+		const explicitRangeSize = this._getExplicitPdfRangeSize(request.pages);
+
+		try {
+			const stats = await fsStat(request.absolutePath);
+			this._pdfReadState.set(request.absolutePath, {
+				mtimeMs: stats.mtimeMs,
+				firstPage: pdfDetails.firstPage,
+				lastPage: pdfDetails.lastPage,
+				rangeSize: pendingWindowSize ?? explicitRangeSize ?? pdfDetails.rangeSize,
+				pageCount: typeof pdfDetails.pageCount === "number" ? pdfDetails.pageCount : undefined,
+			});
+		} catch {
+			return;
+		}
 	}
 
 	// =========================================================================
@@ -948,7 +1129,7 @@ export class AgentSession {
 	 */
 	dispose(): void {
 		this._extensionRunner.invalidate(
-			"This extension instance is stale after session replacement or reload. Use the provided replacement-session context instead.",
+			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
@@ -1226,11 +1407,7 @@ export class AgentSession {
 
 			// Validate model
 			if (!this.model) {
-				throw new Error(
-					"No model selected.\n\n" +
-						`Use /login or set an API key environment variable. See ${join(getDocsPath(), "providers.md")}\n\n` +
-						"Then use /model to select a model.",
-				);
+				throw new Error(formatNoModelSelectedMessage());
 			}
 
 			if (!this._modelRegistry.hasConfiguredAuth(this.model)) {
@@ -1242,10 +1419,7 @@ export class AgentSession {
 							`Run '/login ${this.model.provider}' to re-authenticate.`,
 					);
 				}
-				throw new Error(
-					`No API key found for ${this.model.provider}.\n\n` +
-						`Use /login or set an API key environment variable. See ${join(getDocsPath(), "providers.md")}`,
-				);
+				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
 			}
 
 			// Check if we need to compact before sending (catches aborted responses)
@@ -1834,7 +2008,7 @@ export class AgentSession {
 
 		try {
 			if (!this.model) {
-				throw new Error("No model selected");
+				throw new Error(formatNoModelSelectedMessage());
 			}
 
 			const { apiKey, headers } = await this._getRequiredRequestAuth(this.model);
@@ -1911,6 +2085,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			this._readFileState.clear();
+			this._pdfReadState.clear();
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2184,6 +2359,7 @@ export class AgentSession {
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 			this._readFileState.clear();
+			this._pdfReadState.clear();
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2640,8 +2816,8 @@ export class AgentSession {
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		const err = message.errorMessage;
-		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), fetch failed, request ended without sending chunks, terminated, retry delay exceeded
-		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|timed? out|timeout|terminated|retry delay/i.test(
+		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), fetch failed, request ended without sending chunks, HTTP/2 closed before response, terminated, retry delay exceeded
+		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
 			err,
 		);
 	}

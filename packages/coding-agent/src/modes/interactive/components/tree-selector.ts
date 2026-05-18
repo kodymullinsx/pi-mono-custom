@@ -855,6 +855,10 @@ class TreeList implements Component {
 					typeof args.region === "object" && args.region !== null
 						? (args.region as { left?: unknown; top?: unknown; width?: unknown; height?: unknown })
 						: undefined;
+				const regionNorm =
+					typeof args.regionNorm === "object" && args.regionNorm !== null
+						? (args.regionNorm as { left?: unknown; top?: unknown; width?: unknown; height?: unknown })
+						: undefined;
 				let display = path;
 				if (offset !== undefined || limit !== undefined) {
 					const start = offset ?? 1;
@@ -871,6 +875,14 @@ class TreeList implements Component {
 					typeof region?.height === "number"
 				) {
 					display += ` region=${region.left},${region.top},${region.width}x${region.height}`;
+				}
+				if (
+					typeof regionNorm?.left === "number" &&
+					typeof regionNorm?.top === "number" &&
+					typeof regionNorm?.width === "number" &&
+					typeof regionNorm?.height === "number"
+				) {
+					display += ` regionNorm=${regionNorm.left},${regionNorm.top},${regionNorm.width}x${regionNorm.height}`;
 				}
 				return `[read: ${display}]`;
 			}

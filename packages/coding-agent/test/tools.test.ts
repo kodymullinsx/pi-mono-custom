@@ -214,6 +214,18 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("height=60");
 			expect(result.content.some((c: any) => c.type === "image")).toBe(true);
 		});
+
+		it("supports normalized region crops for visual inspection", async () => {
+			const result = await readTool.execute("test-call-img-crop-norm", {
+				path: RED_CIRCLE_IMAGE,
+				regionNorm: { left: 0.2, top: 0.25, width: 0.4, height: 0.3 },
+			});
+			const output = getTextOutput(result);
+
+			expect(output).toContain("Read image file [");
+			expect(output).toContain("To inspect a smaller area");
+			expect(result.content.some((c: any) => c.type === "image")).toBe(true);
+		});
 	});
 
 	describe("write tool", () => {

@@ -560,6 +560,7 @@
             const limit = args.limit;
             const pages = typeof args.pages === 'string' ? args.pages : undefined;
             const region = typeof args.region === 'object' && args.region !== null ? args.region : undefined;
+            const regionNorm = typeof args.regionNorm === 'object' && args.regionNorm !== null ? args.regionNorm : undefined;
             let display = path;
             if (offset !== undefined || limit !== undefined) {
               const start = offset ?? 1;
@@ -576,6 +577,14 @@
               typeof region?.height === 'number'
             ) {
               display += ` region=${region.left},${region.top},${region.width}x${region.height}`;
+            }
+            if (
+              typeof regionNorm?.left === 'number' &&
+              typeof regionNorm?.top === 'number' &&
+              typeof regionNorm?.width === 'number' &&
+              typeof regionNorm?.height === 'number'
+            ) {
+              display += ` regionNorm=${regionNorm.left},${regionNorm.top},${regionNorm.width}x${regionNorm.height}`;
             }
             return `[read: ${display}]`;
           }
@@ -930,6 +939,7 @@
             const limit = args.limit;
             const pages = typeof args.pages === 'string' ? args.pages : undefined;
             const region = typeof args.region === 'object' && args.region !== null ? args.region : undefined;
+            const regionNorm = typeof args.regionNorm === 'object' && args.regionNorm !== null ? args.regionNorm : undefined;
 
             let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''));
             if (filePath !== null && (offset !== undefined || limit !== undefined)) {
@@ -947,6 +957,14 @@
               typeof region?.height === 'number'
             ) {
               pathHtml += `<span class="line-numbers"> region=${region.left},${region.top},${region.width}x${region.height}</span>`;
+            }
+            if (
+              typeof regionNorm?.left === 'number' &&
+              typeof regionNorm?.top === 'number' &&
+              typeof regionNorm?.width === 'number' &&
+              typeof regionNorm?.height === 'number'
+            ) {
+              pathHtml += `<span class="line-numbers"> regionNorm=${regionNorm.left},${regionNorm.top},${regionNorm.width}x${regionNorm.height}</span>`;
             }
 
             html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;

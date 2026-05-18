@@ -121,8 +121,8 @@ describe("read tool PDF support", () => {
 		expect(result.content[0]).toEqual({
 			type: "text",
 			text:
-				'Showing PDF pages 1-10 of 12. Auto-selected first range. Use pages="11-12" to continue.\n' +
-				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]',
+				'Showing PDF pages 1-10 of 12. Auto-selected first range. Use pages="next" or pages="11-12" to continue.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height} or regionNorm={left,top,width,height}.]',
 		});
 		expect(renderPdfPagesToImageBlocks).toHaveBeenCalledWith(
 			pdfPath,
@@ -164,8 +164,8 @@ describe("read tool PDF support", () => {
 		expect(result.content[0]).toEqual({
 			type: "text",
 			text:
-				'Showing PDF pages 1-10 of 12. Auto-selected first range. Use pages="11-12" to continue.\n' +
-				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]',
+				'Showing PDF pages 1-10 of 12. Auto-selected first range. Use pages="next" or pages="11-12" to continue.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height} or regionNorm={left,top,width,height}.]',
 		});
 		expect(result.content.filter((block) => block.type === "image")).toHaveLength(10);
 		expect(result.details).toEqual({
@@ -217,8 +217,8 @@ describe("read tool PDF support", () => {
 		expect(textBlock).toEqual({
 			type: "text",
 			text:
-				'Showing PDF pages 2-3 of 12. Use pages="4-5" to continue.\n' +
-				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]',
+				'Showing PDF pages 2-3 of 12. Use pages="next" or pages="4-5" to continue. Use pages="prev" to revisit 1.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height} or regionNorm={left,top,width,height}.]',
 		});
 		expect(imageBlocks).toHaveLength(2);
 		expect(imageBlocks[0]).toMatchObject({
@@ -265,8 +265,8 @@ describe("read tool PDF support", () => {
 		expect(result.content[0]).toEqual({
 			type: "text",
 			text:
-				'Prepared 1 of 2 requested PDF pages 2-3 of 12. Use pages="4-5" to continue.\n' +
-				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height}.]\n' +
+				'Prepared 1 of 2 requested PDF pages 2-3 of 12. Use pages="next" or pages="4-5" to continue. Use pages="prev" to revisit 1.\n' +
+				'[To inspect a smaller area, re-read one page with pages="N" and region={left,top,width,height} or regionNorm={left,top,width,height}.]\n' +
 				"[Some requested PDF pages were omitted because they could not be resized below the inline image size limit.]",
 		});
 		expect(result.details).toEqual({
@@ -331,9 +331,9 @@ describe("read tool PDF support", () => {
 			{
 				type: "text",
 				text:
-					'Showing PDF page 4 of 12. Use pages="5" to continue.\n' +
+					'Showing PDF page 4 of 12. Use pages="next" or pages="5" to continue. Use pages="prev" to revisit 3.\n' +
 					"[Image dimensions: 1200x800. Coordinates map directly to the original image.]\n" +
-					'[To inspect a smaller area, re-read this page with pages="4" and region={left,top,width,height}.]',
+					'[To inspect a smaller area, re-read this page with pages="4" and region={left,top,width,height} or regionNorm={left,top,width,height}.]',
 			},
 			{
 				type: "image",
@@ -388,5 +388,63 @@ describe("read tool PDF support", () => {
 				createExtensionContext(),
 			),
 		).rejects.toThrow(/does not overlap the image bounds/i);
+	});
+
+	it("supports normalized region crops for single-page PDF reads", async () => {
+		vi.mocked(renderPdfPagesToImageBlocks).mockResolvedValue([
+			{
+				type: "image",
+				mimeType: "image/jpeg",
+				data: "raw-page-image",
+			},
+		]);
+		vi.mocked(resizeImage).mockResolvedValue({
+			data: "cropped-page-image",
+			mimeType: "image/jpeg",
+			originalWidth: 1200,
+			originalHeight: 800,
+			width: 600,
+			height: 200,
+			wasResized: true,
+			crop: {
+				left: 300,
+				top: 200,
+				width: 600,
+				height: 200,
+			},
+		});
+
+		const tool = createReadToolDefinition(testDir);
+		await tool.execute(
+			"read-pdf-region-norm",
+			{ path: pdfPath, pages: "4", regionNorm: { left: 0.25, top: 0.25, width: 0.5, height: 0.25 } },
+			undefined,
+			undefined,
+			createExtensionContext(),
+		);
+
+		expect(resizeImage).toHaveBeenCalledWith(
+			{ type: "image", mimeType: "image/jpeg", data: "raw-page-image" },
+			{ crop: { left: 300, top: 200, width: 600, height: 200 } },
+		);
+	});
+
+	it("rejects region and regionNorm together", async () => {
+		const tool = createReadToolDefinition(testDir);
+
+		await expect(
+			tool.execute(
+				"read-pdf-region-both",
+				{
+					path: pdfPath,
+					pages: "4",
+					region: { left: 0, top: 0, width: 100, height: 100 },
+					regionNorm: { left: 0, top: 0, width: 0.5, height: 0.5 },
+				},
+				undefined,
+				undefined,
+				createExtensionContext(),
+			),
+		).rejects.toThrow(/either region or regionNorm/i);
 	});
 });
