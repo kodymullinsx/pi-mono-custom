@@ -3,9 +3,10 @@ import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
 	Context,
-	ImageContent,
+	DocumentContent,
 	Message,
 	Model,
+	PromptContentBlock,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
@@ -15,6 +16,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types.js";
+import { getAssistantErrorMetadata } from "../utils/document-utils.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 
 const DEFAULT_API = "faux";
@@ -133,7 +135,12 @@ function randomId(prefix: string): string {
 	return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
-function contentToText(content: string | Array<TextContent | ImageContent>): string {
+function formatDocumentSummary(block: DocumentContent): string {
+	const name = block.fileName ?? "document";
+	return `[document:${name}:${block.mimeType}:${block.data.length}]`;
+}
+
+function contentToText(content: string | PromptContentBlock[]): string {
 	if (typeof content === "string") {
 		return content;
 	}
@@ -142,7 +149,10 @@ function contentToText(content: string | Array<TextContent | ImageContent>): str
 			if (block.type === "text") {
 				return block.text;
 			}
-			return `[image:${block.mimeType}:${block.data.length}]`;
+			if (block.type === "image") {
+				return `[image:${block.mimeType}:${block.data.length}]`;
+			}
+			return formatDocumentSummary(block);
 		})
 		.join("\n");
 }
@@ -272,6 +282,7 @@ function createErrorMessage(error: unknown, api: string, provider: string, model
 		usage: DEFAULT_USAGE,
 		stopReason: "error",
 		errorMessage: error instanceof Error ? error.message : String(error),
+		errorMetadata: getAssistantErrorMetadata(error),
 		timestamp: Date.now(),
 	};
 }

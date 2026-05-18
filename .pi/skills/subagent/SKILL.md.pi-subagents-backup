@@ -1,0 +1,516 @@
+---
+name: subagent
+description: "Spawn isolated sub-agents with dedicated models and tools. Use this whenever work should be delegated to specialized agents, especially for research handoffs, independent review passes, parallel quality sweeps, reusable chains, or any workflow that benefits from isolated context and explicit agent roles. Modes: single, parallel, chain."
+compatibility: Assumes the installed `pi-subagents` package plus the curated user agents in `~/.pi/agent/agents/`.
+---
+
+# Subagent — Multi-Agent Workflows
+
+Reference this skill when you need to spawn subagents using the `subagent` tool.
+
+This skill is intentionally **environment-specific**:
+- It documents the installed `pi-subagents` package capabilities.
+- It also reflects this machine's actual agent roster, models, and preferred reviewer split.
+- Do not blindly follow stale docs or infer capability from `~/.pi/agent/extensions/subagent/` existing or not existing.
+
+## Required References
+
+Read these before acting when the task matches their scope:
+
+- `references/mandatory-review-playbook.md` — mandatory reviewer execution, exact `/run` commands, completion evidence, and blocked handoff format
+- `references/runtime-and-monitoring.md` — package-loader reality, legacy-doc drift, session topology, and how to avoid false hang diagnoses
+
+If the task is **mandatory post-implementation review**, read **both** reference files completely before doing anything.
+
+---
+
+## Reality Check for This Machine
+
+Installed package source:
+- `npm:pi-subagents`
+
+Verification sources:
+- `~/.pi/agent/settings.json`
+- `pi list`
+- installed package at `/Users/kodymullins/.nvm/versions/node/v24.13.0/lib/node_modules/pi-subagents`
+
+What this means:
+- live Pi should have `subagent` and `subagent_status`
+- live Pi should also expose slash commands like `/run`, `/parallel`, `/chain`, `/agents`, and `/subagents-status`
+- if an API or external harness session does not expose the direct `subagent` tool, that is usually a **harness-exposure difference**, not a broken install
+- on this machine, the authoritative install signal is `~/.pi/agent/settings.json -> packages` plus `pi list`; legacy docs and installers may still mention `~/.pi/agent/extensions/subagent/`, but the live package is currently loaded from the npm package path
+
+---
+
+## Zero-Ambiguity Execution Policy
+
+Follow this order exactly. Do not improvise around it.
+
+### Execution priority ladder
+1. **Callable `subagent` tool in the current harness** → use it
+2. **Live Pi / TUI with working slash commands** → use `/run`, `/parallel`, or `/chain` directly there
+3. **Neither of the above** → stop and return blocked with the exact live Pi commands needed
+
+### Decision tree
+1. Check the callable tool list for `subagent`.
+2. If `subagent` is callable, use the tool schema. Do **not** switch to slash commands just because they look easier.
+3. If `subagent` is not callable, verify this is a harness-exposure issue rather than an install issue:
+   - inspect `~/.pi/agent/settings.json -> packages`
+   - run `pi list`
+   - confirm `npm:pi-subagents` is installed
+4. If actual execution is required and you are in a real live Pi session, run the package through its native slash commands there.
+5. If actual execution is required but you are in an API/external harness without direct `subagent` access, **fail closed**. Do not attempt to emulate live Pi from inside the harness.
+
+### Forbidden execution paths for required workflows
+Do **not** use any of these as the main path for mandatory implementation review or other required gates:
+- nested `pi --mode rpc` wrappers
+- custom Node helpers that send slash commands and poll custom messages
+- print-mode bridges
+- top-level `*.jsonl` globbing as a liveness detector
+- repeated retries of slash-over-RPC after the path has already proven unreliable
+
+Those techniques may be acceptable for one-off package investigation when the user explicitly asks, but they are **not** a supported completion path for mandatory review.
+For the concrete mandatory-review procedure, follow `references/mandatory-review-playbook.md` instead of improvising.
+
+---
+
+## Quick Start
+
+Use the `subagent` tool to spawn isolated sub-agents.
+
+### Single
+```json
+{
+  "agent": "agent-name",
+  "task": "Your task description"
+}
+```
+
+### Parallel
+```json
+{
+  "tasks": [
+    {"agent": "frontend-developer", "task": "Audit the signup UI flow"},
+    {"agent": "backend-developer", "task": "Audit the signup API flow"}
+  ]
+}
+```
+
+### Chain
+```json
+{
+  "chain": [
+    {"agent": "code-explorer", "task": "Trace how auth currently works in this repo"},
+    {"agent": "code-architect", "task": "Design the new auth feature based on {previous}"},
+    {"agent": "backend-developer", "task": "Implement the plan based on {previous}"}
+  ]
+}
+```
+
+---
+
+## Slash Commands
+
+The installed `pi-subagents` package also exposes user-facing slash commands.
+Use these when the direct `subagent` tool is not callable in the current harness or when the work is easier to launch interactively.
+
+### Available commands
+- `/run <agent> <task>` — run one agent
+- `/chain ...` — sequential multi-agent pipeline
+- `/parallel ...` — concurrent multi-agent execution
+- `/agents` — open the Agents Manager TUI
+- `/subagents-status` — inspect active and recent async runs
+
+### Examples
+```text
+/run debugger Investigate why login fails in production
+/run reviewer Review this diff --fork
+
+/chain scout "scan the codebase" -> planner "create implementation plan"
+/chain scout "analyze auth" -> planner -> worker --bg
+
+/parallel scout "audit frontend" -> reviewer "audit backend"
+/parallel scout "scan frontend" -> scout "scan backend" -> scout "scan infra" --bg
+```
+
+### Important note
+For this skill, prefer documenting and invoking the **tool schema** when instructing the model. The slash commands are still useful because they reflect real package capabilities and provide the fallback path when the direct tool is unavailable in the current harness.
+
+---
+
+## Model Specification
+
+If you specify a `model`, use the full exact model ID from `~/.pi/agent/models.json`.
+
+### Common model IDs in this setup
+```text
+MiniMaxAI/MiniMax-M2.5
+Qwen/Qwen3.5-397B-A17B
+Qwen/Qwen3-235B-A22B-Instruct-2507
+Qwen/Qwen3-235B-A22B-Thinking-2507
+moonshotai/Kimi-K2.5
+nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
+zai-org/GLM-5
+```
+
+### Best practice
+- Prefer the agent's default model.
+- In this setup, the standard default for subagents is **MiniMaxAI/MiniMax-M2.5**.
+- Only override the model when you have a concrete reason.
+- Do not use shorthand names.
+
+### Recommended family split for implementation workflows
+- `MiniMaxAI/MiniMax-M2.5`: implementation and simplicity passes
+- `moonshotai/Kimi-K2.5`: integration and codebase-recall review
+- `zai-org/GLM-5`: validation and operability review
+- `Qwen/Qwen3-235B-A22B-Thinking-2507`: heavier planning or architecture analysis
+
+When you want genuinely independent review, do not put all reviewer passes on the same family unless there is no better option.
+
+---
+
+## Available Agents
+
+This setup uses a curated set of **user-defined agents** in `~/.pi/agent/agents/`.
+These are often more relevant than package builtin agents.
+
+### Core build / implementation agents
+
+| Agent | Purpose | Default Model | Tools |
+|-------|---------|---------------|-------|
+| `backend-developer` | APIs, microservices, server-side systems | MiniMax M2.5 | read, write, edit, bash, find, grep |
+| `frontend-developer` | React/Vue/Angular/frontend work | MiniMax M2.5 | read, write, edit, bash, find, grep |
+| `data-engineer` | ETL, data pipelines, DB optimization | MiniMax M2.5 | read, write, edit, bash, find, grep |
+| `devops-engineer` | CI/CD, infra, deployment | MiniMax M2.5 | read, write, edit, bash, find, grep |
+| `refactoring-specialist` | Structural code improvements | MiniMax M2.5 | read, write, edit, bash, find, grep |
+| `debugger` | Bug diagnosis and fixes | MiniMax M2.5 | read, write, edit, bash, find, grep |
+
+### Research / analysis agents
+
+| Agent | Purpose | Default Model | Tools |
+|-------|---------|---------------|-------|
+| `researcher` | Thorough web research with synthesis and source selection | MiniMax M2.5 | read, write, bash, find, grep + `brave-search` skill |
+| `researcher-premium` | Higher-cost research pass for harder synthesis and evidence gaps | MiniMax M2.5 | read, write, bash, find, grep + `brave-search` skill |
+| `code-explorer` | Trace how an existing feature or subsystem works | MiniMax M2.5 | read, write, bash, find, grep |
+| `code-architect` | Design implementation blueprints grounded in the codebase | MiniMax M2.5 | read, write, bash, find, grep |
+| `type-design-analyzer` | Review types and models for invariants and API quality | MiniMax M2.5 | read, write, bash, find, grep |
+| `comment-analyzer` | Review comments for accuracy and long-term value | MiniMax M2.5 | read, write, bash, find, grep |
+| `skill-reviewer` | Review skills for trigger quality, structure, and utility | MiniMax M2.5 | read, write, bash, find, grep |
+
+### Review / quality agents
+
+| Agent | Purpose | Default Model | Tools |
+|-------|---------|---------------|-------|
+| `code-reviewer` | Code reviews | MiniMax M2.5 | read, write, edit, bash, find, grep |
+| `code-simplifier` | Simplify code without changing behavior | MiniMax M2.5 | inherited from config |
+| `integration-reviewer` | Find missed reuse, integration gaps, partial migrations, and duplicate logic | Kimi K2.5 | read, grep, find, ls, bash |
+| `pr-test-analyzer` | Review changed code for missing test coverage and brittle tests | MiniMax M2.5 | read, write, bash, find, grep |
+| `security-reviewer` | Security review and vulnerability analysis | MiniMax M2.5 | read, grep, find, ls, bash |
+| `validation-reviewer` | Audit whether the claimed proof and validation are actually strong enough | GLM-5 | read, grep, find, ls, bash |
+| `silent-failure-hunter` | Review silent failures and weak error handling | MiniMax M2.5 | inherited from config |
+
+### Package builtin agents
+
+The installed `pi-subagents` package also ships builtin agents such as:
+- `scout`
+- `planner`
+- `worker`
+- `reviewer`
+- `context-builder`
+- `researcher`
+- `delegate`
+
+Use them when they fit, but in this environment the curated user agents are often the better default.
+
+### Resolution priority
+Subagent discovery resolves by scope priority:
+- project agents: `.pi/agents/*.md`
+- user agents: `~/.pi/agent/agents/*.md`
+- builtin package agents
+
+If the same name exists at multiple levels, the more specific scope wins.
+
+For refined, repeatable workflows that depend on curated user agents, prefer `agentScope: "user"` unless you intentionally want a project-local override.
+
+---
+
+## Suggested Workflows
+
+### 1. Research → architecture → implementation
+```json
+{
+  "chain": [
+    {"agent": "code-explorer", "task": "Trace how auth currently works in this repo"},
+    {"agent": "code-architect", "task": "Design the new auth feature based on {previous}"},
+    {"agent": "backend-developer", "task": "Implement the plan based on {previous}"}
+  ],
+  "context": "fresh",
+  "agentScope": "user"
+}
+```
+
+### 2. Build → review → simplify
+```json
+{
+  "chain": [
+    {"agent": "frontend-developer", "task": "Implement the requested UI change"},
+    {"agent": "code-reviewer", "task": "Review the implementation from {previous}"},
+    {"agent": "code-simplifier", "task": "Simplify the implementation while preserving behavior based on {previous}"}
+  ],
+  "context": "fork",
+  "agentScope": "user"
+}
+```
+
+### 3. Independent review sweep
+```json
+{
+  "tasks": [
+    {
+      "agent": "code-simplifier",
+      "task": "Review the current implementation for unnecessary complexity, avoidable wrappers, and simplifications that preserve behavior."
+    },
+    {
+      "agent": "integration-reviewer",
+      "task": "Review the current implementation for missed reuse, integration gaps, partial rollouts, and contract drift."
+    },
+    {
+      "agent": "validation-reviewer",
+      "task": "Audit whether the current implementation is actually proven by the validation evidence gathered so far."
+    }
+  ],
+  "context": "fork",
+  "agentScope": "user"
+}
+```
+
+---
+
+## Execution Modes
+
+### Single
+```json
+{
+  "agent": "debugger",
+  "task": "Investigate why login fails in production"
+}
+```
+
+### Parallel
+```json
+{
+  "tasks": [
+    {"agent": "frontend-developer", "task": "Audit the signup UI flow"},
+    {"agent": "backend-developer", "task": "Audit the signup API flow"}
+  ]
+}
+```
+
+### Chain
+```json
+{
+  "chain": [
+    {"agent": "researcher", "task": "Research OAuth implementation patterns"},
+    {"agent": "code-architect", "task": "Design an implementation plan based on {previous}"},
+    {"agent": "backend-developer", "task": "Implement the plan based on {previous}"}
+  ]
+}
+```
+
+### Management actions
+```json
+{"action": "list"}
+{"action": "get", "agent": "debugger"}
+{"action": "create", "config": {"name": "new-agent", "description": "...", "systemPrompt": "..."}}
+{"action": "update", "agent": "debugger", "config": {"model": "MiniMaxAI/MiniMax-M2.5"}}
+{"action": "delete", "agent": "old-agent"}
+```
+
+---
+
+## Common Options
+
+| Option | Purpose | Example |
+|--------|---------|---------|
+| `agent` | Which agent to run | `"debugger"`, `"researcher"` |
+| `task` | What to ask the agent | `"Fix the bug"` |
+| `model` | Override model | `"MiniMaxAI/MiniMax-M2.5"` |
+| `output` | Write result to file | `"result.md"` |
+| `skill` | Pass skill(s) to the agent | `["commit"]` |
+| `async` | Run in background | `true` |
+| `cwd` | Working directory | `"/path/to/project"` |
+| `context` | Execution context mode | `"fresh"` or `"fork"` |
+| `agentScope` | Control agent discovery | `"user"`, `"project"`, `"both"` |
+| `clarify` | Show/edit execution plan in TUI first | `true` |
+
+### Important runtime notes
+- `context` defaults to `"fresh"`.
+- `context: "fork"` runs from a real branch of the parent session instead of a clean session.
+- `agentScope: "both"` is the practical default; project agents override user agents on name collision.
+- For curated implementation and review workflows, `agentScope: "user"` is often the better choice because it avoids accidental project-level prompt overrides.
+
+---
+
+## Implement Skill Pairing
+
+When the active workflow is `implement`, the best default split is:
+
+1. Research or design:
+   - `code-explorer`
+   - `code-architect`
+   - `context: "fresh"`
+   - usually `chain`
+2. Implementation:
+   - primary session or a focused builder agent
+   - smallest scope that can finish the approved work
+3. Independent review:
+   - `code-simplifier`
+   - `integration-reviewer`
+   - `validation-reviewer`
+   - optional `silent-failure-hunter`
+   - `context: "fork"`
+   - usually `parallel`
+4. Re-proof:
+   - rerun the promised checks before declaring completion
+
+### Mandatory review recipe — lowest ambiguity path
+
+For mandatory post-implementation review, prefer **one reviewer at a time** with explicit output files so completion is easy to verify.
+
+#### Direct tool path (preferred when `subagent` is callable)
+```json
+{
+  "agent": "code-simplifier",
+  "task": "Review <FILES>. Focus only on unnecessary complexity, speculative abstraction, redundant logic, or simplifications that preserve behavior. Do not edit. Write findings to /tmp/code-simplifier-review.md.",
+  "context": "fork",
+  "agentScope": "user",
+  "model": "MiniMaxAI/MiniMax-M2.5",
+  "output": "/tmp/code-simplifier-review.md"
+}
+```
+
+Repeat the same pattern for:
+- `integration-reviewer` → `/tmp/integration-review.md`
+- `validation-reviewer` → `/tmp/validation-review.md`
+
+#### Live Pi slash-command path (when direct tool is unavailable, but you are actually in live Pi)
+```text
+/run code-simplifier[model=MiniMaxAI/MiniMax-M2.5,output=/tmp/code-simplifier-review.md] Review <FILES>. Focus only on unnecessary complexity, speculative abstraction, redundant logic, or simplifications that preserve behavior. Do not edit. Return concrete findings with severity and file references, or 'no issues'.
+
+/run integration-reviewer[model=moonshotai/Kimi-K2.5,output=/tmp/integration-review.md] Review <FILES>. Focus on missed reuse, integration gaps, partial rollouts, duplicate logic, and contract drift. Do not edit. Return concrete findings with severity and file references, or 'no issues'.
+
+/run validation-reviewer[model=zai-org/GLM-5,output=/tmp/validation-review.md] Audit <FILES> and the validation evidence gathered so far. Focus on proof strength, regression gaps, fallback behavior, silent failure risk, and whether the change is actually demonstrated. Do not edit. Return concrete findings with severity and file references, or 'no issues'.
+```
+
+### Completion verification checklist
+For each required reviewer run, do **all** of the following before declaring it complete:
+- confirm the reviewer-specific output file exists
+- read the output file and capture the actual findings
+- if artifacts are available, prefer `subagent-artifacts/*_meta.json` and `*_output.md` as completion evidence
+- do **not** rely only on a session file changing, or on a top-level `*.jsonl` glob
+- do **not** treat a started run or first read turn as equivalent to a completed review
+
+---
+
+## Harness and Runtime Notes
+
+- In API/external harness sessions, the callable tool list is authoritative.
+- The live Pi runtime may have the `subagent` tool available even when this harness does not expose it directly.
+- Skills can explain fallback paths, but they do not create tool access.
+- If the direct `subagent` tool is missing here, treat that as a probable harness-exposure difference before assuming the package is misinstalled.
+
+### If the direct tool is unavailable here
+- verify the package in `~/.pi/agent/settings.json`
+- run `pi list`
+- confirm live Pi can use the installed package
+- if necessary, continue the subagent-dependent phase in a live Pi session instead of inventing unsupported alternatives
+
+---
+
+## Troubleshooting
+
+### Problem: agent returns no output
+- Check the agent definition in `~/.pi/agent/agents/*.md`
+- Avoid overriding the model unless needed
+- Make sure the task is concrete and scoped
+
+### Problem: model not found
+- Use the full model ID from `~/.pi/agent/models.json`
+- Do not use shorthand names
+
+### Problem: agent seems not to run
+- Check `~/.pi/agent/run-history.jsonl`
+- Confirm the agent name matches the file frontmatter name
+- If running async, inspect the run with `subagent_status`
+- If the direct `subagent` tool is unavailable in the current harness, switch to the interactive slash commands `/run`, `/parallel`, or `/chain` in a live Pi session
+
+### Problem: I can't find `~/.pi/agent/extensions/subagent`
+- That path is not a reliable capability check on this machine
+- The installed `pi-subagents` package can provide working subagent functionality even when there is no literal `~/.pi/agent/extensions/subagent/` directory
+- In this setup, the first checks should be `~/.pi/agent/settings.json` (`packages: ["npm:pi-subagents"]`), `pi list`, and whether `/run` / `/parallel` work in a live Pi session
+- Verify capability by checking the installed package, package settings, slash commands, or actual runs rather than assuming the feature is missing from that path alone
+- Be aware that upstream `pi-subagents` docs and `install.mjs` still describe a legacy clone-based install into `~/.pi/agent/extensions/subagent`; that is not the authoritative runtime path when Pi is loading the npm package directly
+
+### Problem: the package works in live Pi but the direct `subagent` tool is not callable in this session
+- That usually means a harness-exposure difference, not a broken `pi-subagents` install
+- Live Pi loads package resources from installed packages in settings, but an external API harness may expose only a fixed builtin tool list
+- Skills can explain fallback paths, but they do not create tool access by themselves
+- If the direct tool is missing here, use the live Pi slash commands or another verified live-Pi path instead of debugging package installation first
+- Repackaging the npm package into a local extension will **not** by itself fix an external harness that simply does not expose extension tools in its callable tool list
+- The correct fallback order is: direct `subagent` tool → live Pi slash commands entered directly by Pi → blocked handoff with exact commands
+
+### Problem: I am monitoring subagent sessions or artifacts directly
+- Do not assume all subagent session logs live at one flat `sessionDir/*.jsonl` level
+- Fresh-context runs commonly create nested session paths like `<sessionRoot>/<runId>/run-0/<timestamp>.jsonl`
+- Fork-context runs may instead use real branched session files created by Pi's session manager, so the package-managed `sessionRoot` can exist while the actual child session file lives elsewhere
+- Artifact files under `subagent-artifacts/` (`*_input.md`, `*_output.md`, `*_meta.json`) are often a more reliable completion signal than ad hoc top-level session globbing
+- Do not declare a hang just because a top-level `*.jsonl` glob stopped changing
+
+### Problem: I want to drive `/run` or `/parallel` from an external harness via nested `pi --mode rpc`
+- Treat that as an unsupported workaround, not the primary execution path
+- The package's slash commands are designed for live Pi/TUI usage and report progress through custom messages and event bridges; they are not documented as a stable machine-facing RPC API
+- You may use slash-over-RPC for one-off investigation if the user explicitly asks, but do not build mandatory implementation gates on it
+- For required review phases, prefer the direct `subagent` tool when callable; otherwise fail closed and hand back exact live Pi commands for the user to run in Pi
+
+---
+
+## Agent Definition Files
+
+Agent configs live in:
+```text
+~/.pi/agent/agents/*.md
+```
+
+Project-specific agents can also live in:
+```text
+.pi/agents/*.md
+```
+
+Each file may contain:
+- `name`
+- `description`
+- `model`
+- `tools`
+- `thinking`
+- `skill` / `skills`
+- `output`
+- `defaultReads`
+- `defaultProgress`
+- `extensions`
+- a markdown system prompt body
+
+To inspect an agent:
+```json
+{"action": "get", "agent": "debugger"}
+```
+
+---
+
+## Run History
+
+Agent executions are logged to:
+```text
+~/.pi/agent/run-history.jsonl
+```
+
+Each line is a JSON object with agent, task, status, and duration.

@@ -12,7 +12,7 @@
         bytes[i] = binary.charCodeAt(i);
       }
       const data = JSON.parse(new TextDecoder('utf-8').decode(bytes));
-      const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
+      const { header, entries, downloadEntries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
 
       // ============================================================
       // URL PARAMETER HANDLING
@@ -313,22 +313,6 @@
         return '';
       }
 
-      /**
-       * Parse a skill block from message text.
-       * Returns null if the text doesn't contain a skill block.
-       * Matches the format: <skill name="..." location="...">\n...\n</skill>\n\nuser message
-       */
-      function parseSkillBlock(text) {
-        const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
-        if (!match) return null;
-        return {
-          name: match[1],
-          location: match[2],
-          content: match[3],
-          userMessage: match[4]?.trim() || undefined,
-        };
-      }
-
       function getSearchableText(entry, label) {
         const parts = [];
         if (label) parts.push(label);
@@ -574,11 +558,33 @@
             const path = shortenPath(String(args.path || args.file_path || ''));
             const offset = args.offset;
             const limit = args.limit;
+            const pages = typeof args.pages === 'string' ? args.pages : undefined;
+            const region = typeof args.region === 'object' && args.region !== null ? args.region : undefined;
+            const regionNorm = typeof args.regionNorm === 'object' && args.regionNorm !== null ? args.regionNorm : undefined;
             let display = path;
             if (offset !== undefined || limit !== undefined) {
               const start = offset ?? 1;
               const end = limit !== undefined ? start + limit - 1 : '';
               display += `:${start}${end ? `-${end}` : ''}`;
+            }
+            if (pages) {
+              display += ` pages=${pages}`;
+            }
+            if (
+              typeof region?.left === 'number' &&
+              typeof region?.top === 'number' &&
+              typeof region?.width === 'number' &&
+              typeof region?.height === 'number'
+            ) {
+              display += ` region=${region.left},${region.top},${region.width}x${region.height}`;
+            }
+            if (
+              typeof regionNorm?.left === 'number' &&
+              typeof regionNorm?.top === 'number' &&
+              typeof regionNorm?.width === 'number' &&
+              typeof regionNorm?.height === 'number'
+            ) {
+              display += ` regionNorm=${regionNorm.left},${regionNorm.top},${regionNorm.width}x${regionNorm.height}`;
             }
             return `[read: ${display}]`;
           }
@@ -629,16 +635,7 @@
           case 'message': {
             const msg = entry.message;
             if (msg.role === 'user') {
-              const rawContent = extractContent(msg.content);
-              const skillBlock = parseSkillBlock(rawContent);
-              if (skillBlock) {
-                let treeHtml = labelHtml + `<span class="tree-role-skill">skill:</span> ${escapeHtml(skillBlock.name)}`;
-                if (skillBlock.userMessage) {
-                  treeHtml += ` · <span class="tree-role-user">user:</span> ${escapeHtml(truncate(normalize(skillBlock.userMessage)))}`;
-                }
-                return treeHtml;
-              }
-              const content = truncate(normalize(rawContent));
+              const content = truncate(normalize(extractContent(msg.content)));
               return labelHtml + `<span class="tree-role-user">user:</span> ${escapeHtml(content)}`;
             }
             if (msg.role === 'assistant') {
@@ -659,13 +656,13 @@
               if (toolCall) {
                 return labelHtml + `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`;
               }
-              return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || 'tool')}]</span>`;
+              return labelHtml + `<span class="tree-role-tool">[${msg.toolName || 'tool'}]</span>`;
             }
             if (msg.role === 'bashExecution') {
               const cmd = truncate(normalize(msg.command || ''));
               return labelHtml + `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`;
             }
-            return labelHtml + `<span class="tree-muted">[${escapeHtml(msg.role)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[${msg.role}]</span>`;
           }
           case 'compaction':
             return labelHtml + `<span class="tree-compaction">[compaction: ${Math.round(entry.tokensBefore/1000)}k tokens]</span>`;
@@ -678,11 +675,11 @@
             return labelHtml + `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`;
           }
           case 'model_change':
-            return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[model: ${entry.modelId}]</span>`;
           case 'thinking_level_change':
-            return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[thinking: ${entry.thinkingLevel}]</span>`;
           default:
-            return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[${entry.type}]</span>`;
         }
       }
 
@@ -906,7 +903,16 @@
           const images = getResultImages();
           if (images.length === 0) return '';
           return '<div class="tool-images">' +
-            images.map(img => `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="tool-image" />`).join('') +
+            images.map(img => `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${img.data}" class="tool-image" />`).join('') +
+            '</div>';
+        };
+
+        const renderResultDocuments = () => {
+          if (!result) return '';
+          const documents = result.content.filter(c => c.type === 'document');
+          if (documents.length === 0) return '';
+          return '<div class="tool-documents">' +
+            documents.map(doc => `<div class="tool-document">[document attached: ${escapeHtml(doc.fileName || doc.mimeType || 'document')}]</div>`).join('') +
             '</div>';
         };
 
@@ -931,6 +937,9 @@
             const filePath = str(args.file_path ?? args.path);
             const offset = args.offset;
             const limit = args.limit;
+            const pages = typeof args.pages === 'string' ? args.pages : undefined;
+            const region = typeof args.region === 'object' && args.region !== null ? args.region : undefined;
+            const regionNorm = typeof args.regionNorm === 'object' && args.regionNorm !== null ? args.regionNorm : undefined;
 
             let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''));
             if (filePath !== null && (offset !== undefined || limit !== undefined)) {
@@ -938,10 +947,30 @@
               const endLine = limit !== undefined ? startLine + limit - 1 : '';
               pathHtml += `<span class="line-numbers">:${startLine}${endLine ? '-' + endLine : ''}</span>`;
             }
+            if (pages) {
+              pathHtml += `<span class="line-numbers"> pages=${escapeHtml(pages)}</span>`;
+            }
+            if (
+              typeof region?.left === 'number' &&
+              typeof region?.top === 'number' &&
+              typeof region?.width === 'number' &&
+              typeof region?.height === 'number'
+            ) {
+              pathHtml += `<span class="line-numbers"> region=${region.left},${region.top},${region.width}x${region.height}</span>`;
+            }
+            if (
+              typeof regionNorm?.left === 'number' &&
+              typeof regionNorm?.top === 'number' &&
+              typeof regionNorm?.width === 'number' &&
+              typeof regionNorm?.height === 'number'
+            ) {
+              pathHtml += `<span class="line-numbers"> regionNorm=${regionNorm.left},${regionNorm.top},${regionNorm.width}x${regionNorm.height}</span>`;
+            }
 
             html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
             if (result) {
               html += renderResultImages();
+              html += renderResultDocuments();
               const output = getResultText();
               const lang = filePath ? getLanguageFromPath(filePath) : null;
               if (output) html += formatExpandableOutput(output, 10, lang);
@@ -1056,7 +1085,8 @@
         if (header) {
           lines.push(JSON.stringify({ type: 'header', ...header }));
         }
-        for (const entry of entries) {
+        const jsonlEntries = Array.isArray(downloadEntries) ? downloadEntries : entries;
+        for (const entry of jsonlEntries) {
           lines.push(JSON.stringify(entry));
         }
         const jsonlContent = lines.join('\n');
@@ -1147,7 +1177,7 @@
        * Render the copy-link button HTML for a message.
        */
       function renderCopyLinkButton(entryId) {
-        return `<button class="copy-link-btn" data-entry-id="${escapeHtml(entryId)}" title="Copy link to this message">
+        return `<button class="copy-link-btn" data-entry-id="${entryId}" title="Copy link to this message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -1158,65 +1188,38 @@
       function renderEntry(entry) {
         const ts = formatTimestamp(entry.timestamp);
         const tsHtml = ts ? `<div class="message-timestamp">${ts}</div>` : '';
-        const entryDomId = `entry-${escapeHtml(entry.id)}`;
+        const entryId = `entry-${entry.id}`;
         const copyBtnHtml = renderCopyLinkButton(entry.id);
 
         if (entry.type === 'message') {
           const msg = entry.message;
 
           if (msg.role === 'user') {
+            let html = `<div class="user-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
             const content = msg.content;
-            const text = typeof content === 'string' ? content :
-              content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-            const skillBlock = parseSkillBlock(text);
-
-            if (skillBlock) {
-              // Collect images from content array
-              const images = Array.isArray(content) ? content.filter(c => c.type === 'image') : [];
-              const hasUserContent = skillBlock.userMessage || images.length > 0;
-              let html = `<div class="skill-user-entry" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
-
-              // Skill invocation (collapsed by default, click to expand)
-              html += `<div class="skill-invocation" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
-                <div class="skill-invocation-label">[skill] ${escapeHtml(skillBlock.name)}</div>
-                <div class="skill-invocation-collapsed">${escapeHtml(skillBlock.name)} (click to expand)</div>
-                <div class="skill-invocation-content markdown-content">${safeMarkedParse(skillBlock.content)}</div>
-              </div>`;
-
-              // User message (separate block if present)
-              if (hasUserContent) {
-                html += '<div class="user-message">';
-                if (images.length > 0) {
-                  html += '<div class="message-images">';
-                  for (const img of images) {
-                    html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="message-image" />`;
-                  }
-                  html += '</div>';
-                }
-                if (skillBlock.userMessage) {
-                  html += `<div class="markdown-content">${safeMarkedParse(skillBlock.userMessage)}</div>`;
-                }
-                html += '</div>';
-              }
-
-              html += '</div>';
-              return html;
-            }
-
-            // No skill block - normal user message
-            let html = `<div class="user-message" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
 
             if (Array.isArray(content)) {
               const images = content.filter(c => c.type === 'image');
               if (images.length > 0) {
                 html += '<div class="message-images">';
                 for (const img of images) {
-                  html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="message-image" />`;
+                  html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${img.data}" class="message-image" />`;
+                }
+                html += '</div>';
+              }
+
+              const documents = content.filter(c => c.type === 'document');
+              if (documents.length > 0) {
+                html += '<div class="message-documents">';
+                for (const doc of documents) {
+                  html += `<div class="message-document">[document attached: ${escapeHtml(doc.fileName || doc.mimeType || 'document')}]</div>`;
                 }
                 html += '</div>';
               }
             }
 
+            const text = typeof content === 'string' ? content :
+              content.filter(c => c.type === 'text').map(c => c.text).join('\n');
             if (text.trim()) {
               html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
             }
@@ -1225,7 +1228,7 @@
           }
 
           if (msg.role === 'assistant') {
-            let html = `<div class="assistant-message" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
+            let html = `<div class="assistant-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
 
             for (const block of msg.content) {
               if (block.type === 'text' && block.text.trim()) {
@@ -1256,7 +1259,7 @@
 
           if (msg.role === 'bashExecution') {
             const isError = msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
-            let html = `<div class="tool-execution ${isError ? 'error' : 'success'}" id="${entryDomId}">${tsHtml}`;
+            let html = `<div class="tool-execution ${isError ? 'error' : 'success'}" id="${entryId}">${tsHtml}`;
             html += `<div class="tool-command">$ ${escapeHtml(msg.command)}</div>`;
             if (msg.output) html += formatExpandableOutput(msg.output, 10);
             if (msg.cancelled) {
@@ -1272,11 +1275,11 @@
         }
 
         if (entry.type === 'model_change') {
-          return `<div class="model-change" id="${entryDomId}">${tsHtml}Switched to model: <span class="model-name">${escapeHtml(entry.provider)}/${escapeHtml(entry.modelId)}</span></div>`;
+          return `<div class="model-change" id="${entryId}">${tsHtml}Switched to model: <span class="model-name">${escapeHtml(entry.provider)}/${escapeHtml(entry.modelId)}</span></div>`;
         }
 
         if (entry.type === 'compaction') {
-          return `<div class="compaction" id="${entryDomId}" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
+          return `<div class="compaction" id="${entryId}" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
             <div class="compaction-label">[compaction]</div>
             <div class="compaction-collapsed">Compacted from ${entry.tokensBefore.toLocaleString()} tokens</div>
             <div class="compaction-content"><strong>Compacted from ${entry.tokensBefore.toLocaleString()} tokens</strong>\n\n${escapeHtml(entry.summary)}</div>
@@ -1284,14 +1287,14 @@
         }
 
         if (entry.type === 'branch_summary') {
-          return `<div class="branch-summary" id="${entryDomId}">${tsHtml}
+          return `<div class="branch-summary" id="${entryId}">${tsHtml}
             <div class="branch-summary-header">Branch Summary</div>
             <div class="markdown-content">${safeMarkedParse(entry.summary)}</div>
           </div>`;
         }
 
         if (entry.type === 'custom_message' && entry.display) {
-          return `<div class="hook-message" id="${entryDomId}">${tsHtml}
+          return `<div class="hook-message" id="${entryId}">${tsHtml}
             <div class="hook-type">[${escapeHtml(entry.customType)}]</div>
             <div class="markdown-content">${safeMarkedParse(typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content))}</div>
           </div>`;
@@ -1377,7 +1380,7 @@
             </div>
             <div class="header-info">
               <div class="info-item"><span class="info-label">Date:</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : 'unknown'}</span></div>
-              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${escapeHtml(globalStats.models.join(', ') || 'unknown')}</span></div>
+              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${globalStats.models.join(', ') || 'unknown'}</span></div>
               <div class="info-item"><span class="info-label">Messages:</span><span class="info-value">${msgParts.join(', ') || '0'}</span></div>
               <div class="info-item"><span class="info-label">Tool Calls:</span><span class="info-value">${globalStats.toolCalls}</span></div>
               <div class="info-item"><span class="info-label">Tokens:</span><span class="info-value">${tokenParts.join(' ') || '0'}</span></div>
@@ -1775,9 +1778,6 @@
           el.classList.toggle('expanded', toolOutputsExpanded);
         });
         document.querySelectorAll('.compaction').forEach(el => {
-          el.classList.toggle('expanded', toolOutputsExpanded);
-        });
-        document.querySelectorAll('.skill-invocation').forEach(el => {
           el.classList.toggle('expanded', toolOutputsExpanded);
         });
       };

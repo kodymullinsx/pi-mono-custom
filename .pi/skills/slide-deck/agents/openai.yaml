@@ -1,0 +1,7 @@
+interface:
+  display_name: "Slide Deck"
+  short_description: "Structure, polish, and QA slide decks"
+  brand_color: "#00A0DF"
+  default_prompt: "Use $slide-deck to structure and QA this presentation before delivery."
+policy:
+  allow_implicit_invocation: true

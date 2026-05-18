@@ -3,7 +3,7 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { AttachmentContent, Model } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
@@ -923,7 +923,7 @@ export class ExtensionRunner {
 
 	async emitBeforeAgentStart(
 		prompt: string,
-		images: ImageContent[] | undefined,
+		attachments: AttachmentContent[] | undefined,
 		systemPrompt: string,
 		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
@@ -948,7 +948,8 @@ export class ExtensionRunner {
 					const event: BeforeAgentStartEvent = {
 						type: "before_agent_start",
 						prompt,
-						images,
+						attachments,
+						images: attachments?.filter((attachment) => attachment.type === "image"),
 						systemPrompt: currentSystemPrompt,
 						systemPromptOptions,
 					};
@@ -1036,20 +1037,30 @@ export class ExtensionRunner {
 	}
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
-	async emitInput(text: string, images: ImageContent[] | undefined, source: InputSource): Promise<InputEventResult> {
+	async emitInput(
+		text: string,
+		attachments: AttachmentContent[] | undefined,
+		source: InputSource,
+	): Promise<InputEventResult> {
 		const ctx = this.createContext();
 		let currentText = text;
-		let currentImages = images;
+		let currentAttachments = attachments;
 
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
 				try {
-					const event: InputEvent = { type: "input", text: currentText, images: currentImages, source };
+					const event: InputEvent = {
+						type: "input",
+						text: currentText,
+						attachments: currentAttachments,
+						images: currentAttachments?.filter((attachment) => attachment.type === "image"),
+						source,
+					};
 					const result = (await handler(event, ctx)) as InputEventResult | undefined;
 					if (result?.action === "handled") return result;
 					if (result?.action === "transform") {
 						currentText = result.text;
-						currentImages = result.images ?? currentImages;
+						currentAttachments = result.attachments ?? result.images ?? currentAttachments;
 					}
 				} catch (err) {
 					this.emitError({
@@ -1061,8 +1072,13 @@ export class ExtensionRunner {
 				}
 			}
 		}
-		return currentText !== text || currentImages !== images
-			? { action: "transform", text: currentText, images: currentImages }
+		return currentText !== text || currentAttachments !== attachments
+			? {
+					action: "transform",
+					text: currentText,
+					attachments: currentAttachments,
+					images: currentAttachments?.filter((attachment) => attachment.type === "image"),
+				}
 			: { action: "continue" };
 	}
 }

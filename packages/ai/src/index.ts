@@ -27,6 +27,7 @@ export * from "./session-resources.js";
 export * from "./stream.js";
 export * from "./types.js";
 export * from "./utils/diagnostics.js";
+export * from "./utils/document-utils.js";
 export * from "./utils/event-stream.js";
 export * from "./utils/json-parse.js";
 export type {

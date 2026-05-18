@@ -1,10 +1,9 @@
 import type {
 	Api,
 	AssistantMessage,
-	ImageContent,
 	Message,
 	Model,
-	TextContent,
+	PromptContentBlock,
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
@@ -12,8 +11,8 @@ import type {
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 
-function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], placeholder: string): TextContent[] {
-	const result: TextContent[] = [];
+function replaceImagesWithPlaceholder(content: PromptContentBlock[], placeholder: string): PromptContentBlock[] {
+	const result: PromptContentBlock[] = [];
 	let previousWasPlaceholder = false;
 
 	for (const block of content) {
@@ -26,7 +25,7 @@ function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], p
 		}
 
 		result.push(block);
-		previousWasPlaceholder = block.text === placeholder;
+		previousWasPlaceholder = block.type === "text" && block.text === placeholder;
 	}
 
 	return result;

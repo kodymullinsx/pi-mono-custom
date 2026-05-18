@@ -99,4 +99,55 @@ describe("google-shared image tool result routing", () => {
 		expect(imageResponse?.parts).toHaveLength(1);
 		expect(imageResponse?.parts?.[0]?.inlineData).toBeTruthy();
 	});
+
+	it("summarizes unsupported user document blocks instead of blindly inlining them", () => {
+		const model = makeModel("google-generative-ai", "google", "gemini-2.5-flash");
+		const contents = convertMessages(model, {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "inspect this" },
+						{
+							type: "document",
+							mimeType: "application/pdf",
+							data: "JVBERi0xLjQ=",
+							fileName: "evidence.pdf",
+						},
+					],
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		expect(contents[0].parts?.[1]).toEqual({ text: "[document attached: evidence.pdf (application/pdf)]" });
+	});
+
+	it("inlines user document blocks only when the model declares document input", () => {
+		const model = {
+			...makeModel("google-generative-ai", "google", "gemini-2.5-flash"),
+			input: ["text", "image", "document"] as Model<"google-generative-ai">["input"],
+		};
+		const contents = convertMessages(model, {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{
+							type: "document",
+							mimeType: "application/pdf",
+							data: "JVBERi0xLjQ=",
+							fileName: "evidence.pdf",
+						},
+					],
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		expect(contents[0].parts?.[0]?.inlineData).toEqual({
+			mimeType: "application/pdf",
+			data: "JVBERi0xLjQ=",
+		});
+	});
 });

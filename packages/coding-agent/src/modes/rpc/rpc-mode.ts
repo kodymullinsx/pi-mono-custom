@@ -382,7 +382,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				let preflightSucceeded = false;
 				void session
 					.prompt(command.message, {
-						images: command.images,
+						attachments: command.attachments ?? command.images,
 						streamingBehavior: command.streamingBehavior,
 						source: "rpc",
 						preflightResult: (didSucceed) => {
@@ -401,12 +401,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 
 			case "steer": {
-				await session.steer(command.message, command.images);
+				await session.steer(command.message, command.attachments ?? command.images);
 				return success(id, "steer");
 			}
 
 			case "follow_up": {
-				await session.followUp(command.message, command.images);
+				await session.followUp(command.message, command.attachments ?? command.images);
 				return success(id, "follow_up");
 			}
 

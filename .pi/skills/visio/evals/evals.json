@@ -1,0 +1,23 @@
+{
+  "skill_name": "visio",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Inspect this .vsdx and tell me what pages, shapes, text, masters, and connectors it contains.",
+      "expected_output": "Uses the visio skill, runs structural inspection, summarizes pages/masters/text/edges, and does not rely on raw grep for XML text.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Change the label on one Visio process box, preserve the rest of the drawing, and give me back an editable .vsdx.",
+      "expected_output": "Keeps the original untouched, unpacks the package, performs a targeted XML edit, validates, repacks, and calls out visual QA limitations if Visio/rendering is unavailable.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "This file has a .zip extension but I think it is a Visio drawing. Can you read it?",
+      "expected_output": "Treats misnamed OOXML ZIPs as possible Visio packages, checks [Content_Types].xml and relationships, validates, and explains the package structure.",
+      "files": []
+    }
+  ]
+}

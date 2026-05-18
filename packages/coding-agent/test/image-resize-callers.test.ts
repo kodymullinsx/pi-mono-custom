@@ -47,7 +47,7 @@ describe("image resize callers", () => {
 
 		const result = await processFileArguments([imagePath]);
 
-		expect(result.images).toHaveLength(0);
+		expect(result.attachments).toHaveLength(0);
 		expect(result.text).toContain("Image omitted");
 	});
 });

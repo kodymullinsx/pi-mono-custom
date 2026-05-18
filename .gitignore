@@ -39,3 +39,7 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+
+# Local user extensions (only background-computer-use is tracked)
+.pi/extensions/*
+!.pi/extensions/background-computer-use/

@@ -267,6 +267,22 @@ describe("harness compaction", () => {
 			isError: false,
 			timestamp: Date.now(),
 		};
+		const userWithDocument: AgentMessage = {
+			role: "user",
+			content: [
+				{ type: "text", text: "inspect" },
+				{ type: "document", mimeType: "application/pdf", data: "JVBERi0xLjQ=", fileName: "evidence.pdf" },
+			],
+			timestamp: Date.now(),
+		};
+		const toolResultWithDocument: AgentMessage = {
+			role: "toolResult",
+			toolCallId: "call-doc",
+			toolName: "read",
+			content: [{ type: "document", mimeType: "application/pdf", data: "JVBERi0xLjQ=", fileName: "evidence.pdf" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
 		const bashExecution: AgentMessage = {
 			role: "bashExecution",
 			command: "npm run check",
@@ -293,6 +309,8 @@ describe("harness compaction", () => {
 		expect(estimateTokens(assistantWithThinkingAndTool)).toBeGreaterThan(0);
 		expect(estimateTokens(customString)).toBeGreaterThan(0);
 		expect(estimateTokens(toolResultWithImage)).toBeGreaterThan(1000);
+		expect(estimateTokens(userWithDocument)).toBeGreaterThan(1000);
+		expect(estimateTokens(toolResultWithDocument)).toBeGreaterThan(1000);
 		expect(estimateTokens(bashExecution)).toBeGreaterThan(0);
 		expect(estimateTokens(branchSummaryMessage)).toBeGreaterThan(0);
 		expect(estimateTokens(compactionSummaryMessage)).toBeGreaterThan(0);

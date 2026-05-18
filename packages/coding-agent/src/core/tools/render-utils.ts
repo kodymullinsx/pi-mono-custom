@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { PromptContentBlock } from "@earendil-works/pi-ai";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../../utils/ansi.js";
 import { sanitizeBinaryOutput } from "../../utils/shell.js";
@@ -55,7 +55,7 @@ export function getTextOutput(
 }
 
 export type ToolRenderResultLike<TDetails> = {
-	content: (TextContent | ImageContent)[];
+	content: PromptContentBlock[];
 	details: TDetails;
 };
 

@@ -1,0 +1,11 @@
+references:
+  - path: skill-archetypes.md
+    read_when: "Classifying a skill's dominant operating mode, choosing folder shape, deciding what belongs in SKILL.md versus references/scripts/assets, or designing archetype-specific evals and trigger queries."
+  - path: schemas.md
+    read_when: "Creating or validating evals.json, eval_metadata.json, grading.json, timing.json, benchmark.json, or workspace run layouts."
+  - path: chat-history-skill-mining.md
+    read_when: "Mining historical chats for skill patches, correction loops, or eval prompts generated from real model/user interactions."
+  - path: environment-adaptations.md
+    read_when: "Running skill-creator in Claude.ai or Cowork instead of Claude Code. Covers what to adapt around subagents, the browser viewer, and description optimization."
+  - path: mirror-maintenance.md
+    read_when: "Mirroring a skill across multiple CLIs (Claude Code, Pi, Codex). Covers update order, hash verification, and validator checks."

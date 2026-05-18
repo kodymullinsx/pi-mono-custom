@@ -1,10 +1,11 @@
 import {
-	type ImageContent,
+	type AssistantErrorMetadata,
+	type AttachmentContent,
 	type Message,
 	type Model,
+	type PromptContentBlock,
 	type SimpleStreamOptions,
 	streamSimple,
-	type TextContent,
 	type ThinkingBudgets,
 	type Transport,
 } from "@earendil-works/pi-ai";
@@ -320,14 +321,14 @@ export class Agent {
 
 	/** Start a new prompt from text, a single message, or a batch of messages. */
 	async prompt(message: AgentMessage | AgentMessage[]): Promise<void>;
-	async prompt(input: string, images?: ImageContent[]): Promise<void>;
-	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> {
+	async prompt(input: string, attachments?: AttachmentContent[]): Promise<void>;
+	async prompt(input: string | AgentMessage | AgentMessage[], attachments?: AttachmentContent[]): Promise<void> {
 		if (this.activeRun) {
 			throw new Error(
 				"Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
 			);
 		}
-		const messages = this.normalizePromptInput(input, images);
+		const messages = this.normalizePromptInput(input, attachments);
 		await this.runPromptMessages(messages);
 	}
 
@@ -363,7 +364,7 @@ export class Agent {
 
 	private normalizePromptInput(
 		input: string | AgentMessage | AgentMessage[],
-		images?: ImageContent[],
+		attachments?: AttachmentContent[],
 	): AgentMessage[] {
 		if (Array.isArray(input)) {
 			return input;
@@ -373,9 +374,9 @@ export class Agent {
 			return [input];
 		}
 
-		const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
-		if (images && images.length > 0) {
-			content.push(...images);
+		const content: PromptContentBlock[] = [{ type: "text", text: input }];
+		if (attachments && attachments.length > 0) {
+			content.push(...attachments);
 		}
 		return [{ role: "user", content, timestamp: Date.now() }];
 	}
@@ -471,6 +472,10 @@ export class Agent {
 	}
 
 	private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
+		const errorMetadata =
+			typeof error === "object" && error !== null && "errorMetadata" in error
+				? ((error as { errorMetadata?: AssistantErrorMetadata }).errorMetadata ?? undefined)
+				: undefined;
 		const failureMessage = {
 			role: "assistant",
 			content: [{ type: "text", text: "" }],
@@ -480,6 +485,7 @@ export class Agent {
 			usage: EMPTY_USAGE,
 			stopReason: aborted ? "aborted" : "error",
 			errorMessage: error instanceof Error ? error.message : String(error),
+			errorMetadata,
 			timestamp: Date.now(),
 		} satisfies AgentMessage;
 		await this.processEvents({ type: "message_start", message: failureMessage });

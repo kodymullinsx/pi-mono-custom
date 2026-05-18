@@ -206,10 +206,10 @@ async function runLoop(
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit);
-				toolResults.push(...executedToolBatch.messages);
+				toolResults.push(...executedToolBatch.toolResults);
 				hasMoreToolCalls = !executedToolBatch.terminate;
 
-				for (const result of toolResults) {
+				for (const result of executedToolBatch.messages) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
 				}
@@ -388,7 +388,8 @@ async function executeToolCalls(
 }
 
 type ExecutedToolCallBatch = {
-	messages: ToolResultMessage[];
+	messages: AgentMessage[];
+	toolResults: ToolResultMessage[];
 	terminate: boolean;
 };
 
@@ -401,17 +402,17 @@ async function executeToolCallsSequential(
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallOutcome[] = [];
-	const messages: ToolResultMessage[] = [];
+	const messages: AgentMessage[] = [];
+	const toolResults: ToolResultMessage[] = [];
 
 	for (const toolCall of toolCalls) {
+		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
-			args: toolCall.arguments,
+			args: preparation.kind === "prepared" ? preparation.args : toolCall.arguments,
 		});
-
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		let finalized: FinalizedToolCallOutcome;
 		if (preparation.kind === "immediate") {
 			finalized = {
@@ -434,12 +435,18 @@ async function executeToolCallsSequential(
 		await emitToolExecutionEnd(finalized, emit);
 		const toolResultMessage = createToolResultMessage(finalized);
 		await emitToolResultMessage(toolResultMessage, emit);
+		await emitSupplementalMessages(finalized.result.newMessages, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
+		toolResults.push(toolResultMessage);
+		if (finalized.result.newMessages) {
+			messages.push(...finalized.result.newMessages);
+		}
 	}
 
 	return {
 		messages,
+		toolResults,
 		terminate: shouldTerminateToolBatch(finalizedCalls),
 	};
 }
@@ -455,14 +462,13 @@ async function executeToolCallsParallel(
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
 	for (const toolCall of toolCalls) {
+		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
-			args: toolCall.arguments,
+			args: preparation.kind === "prepared" ? preparation.args : toolCall.arguments,
 		});
-
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
 			const finalized = {
 				toolCall,
@@ -492,15 +498,22 @@ async function executeToolCallsParallel(
 	const orderedFinalizedCalls = await Promise.all(
 		finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
 	);
-	const messages: ToolResultMessage[] = [];
+	const messages: AgentMessage[] = [];
+	const toolResults: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
 		const toolResultMessage = createToolResultMessage(finalized);
 		await emitToolResultMessage(toolResultMessage, emit);
+		await emitSupplementalMessages(finalized.result.newMessages, emit);
 		messages.push(toolResultMessage);
+		toolResults.push(toolResultMessage);
+		if (finalized.result.newMessages) {
+			messages.push(...finalized.result.newMessages);
+		}
 	}
 
 	return {
 		messages,
+		toolResults,
 		terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
 	};
 }
@@ -586,9 +599,10 @@ async function prepareToolCall(
 				};
 			}
 		}
+		preparedToolCall.arguments = validatedArgs as Record<string, unknown>;
 		return {
 			kind: "prepared",
-			toolCall,
+			toolCall: preparedToolCall,
 			tool,
 			args: validatedArgs,
 		};
@@ -666,6 +680,7 @@ async function finalizeExecutedToolCall(
 				result = {
 					content: afterResult.content ?? result.content,
 					details: afterResult.details ?? result.details,
+					newMessages: afterResult.newMessages ?? result.newMessages,
 					terminate: afterResult.terminate ?? result.terminate,
 				};
 				isError = afterResult.isError ?? isError;
@@ -715,4 +730,15 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 async function emitToolResultMessage(toolResultMessage: ToolResultMessage, emit: AgentEventSink): Promise<void> {
 	await emit({ type: "message_start", message: toolResultMessage });
 	await emit({ type: "message_end", message: toolResultMessage });
+}
+
+async function emitSupplementalMessages(messages: AgentMessage[] | undefined, emit: AgentEventSink): Promise<void> {
+	if (!messages || messages.length === 0) {
+		return;
+	}
+
+	for (const message of messages) {
+		await emit({ type: "message_start", message });
+		await emit({ type: "message_end", message });
+	}
 }

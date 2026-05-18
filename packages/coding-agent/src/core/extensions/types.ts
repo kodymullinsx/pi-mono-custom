@@ -19,13 +19,14 @@ import type {
 	Api,
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
+	AttachmentContent,
 	Context,
 	ImageContent,
 	Model,
 	OAuthCredentials,
 	OAuthLoginCallbacks,
+	PromptContentBlock,
 	SimpleStreamOptions,
-	TextContent,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import type {
@@ -375,7 +376,7 @@ export interface ReplacedSessionContext extends ExtensionCommandContext {
 	): Promise<void>;
 
 	sendUserMessage(
-		content: string | (TextContent | ImageContent)[],
+		content: string | PromptContentBlock[],
 		options?: { deliverAs?: "steer" | "followUp" },
 	): Promise<void>;
 }
@@ -626,6 +627,7 @@ export interface BeforeAgentStartEvent {
 	/** The raw user prompt text (after expansion). */
 	prompt: string;
 	/** Images attached to the user prompt, if any. */
+	attachments?: AttachmentContent[];
 	images?: ImageContent[];
 	/** The fully assembled system prompt string. */
 	systemPrompt: string;
@@ -753,6 +755,7 @@ export interface InputEvent {
 	/** The input text */
 	text: string;
 	/** Attached images, if any */
+	attachments?: AttachmentContent[];
 	images?: ImageContent[];
 	/** Where the input came from */
 	source: InputSource;
@@ -761,7 +764,7 @@ export interface InputEvent {
 /** Result from input event handler */
 export type InputEventResult =
 	| { action: "continue" }
-	| { action: "transform"; text: string; images?: ImageContent[] }
+	| { action: "transform"; text: string; attachments?: AttachmentContent[]; images?: ImageContent[] }
 	| { action: "handled" };
 
 // ============================================================================
@@ -833,7 +836,9 @@ interface ToolResultEventBase {
 	type: "tool_result";
 	toolCallId: string;
 	input: Record<string, unknown>;
-	content: (TextContent | ImageContent)[];
+	content: PromptContentBlock[];
+	details?: unknown;
+	newMessages?: AgentMessage[];
 	isError: boolean;
 }
 
@@ -996,8 +1001,9 @@ export interface UserBashEventResult {
 }
 
 export interface ToolResultEventResult {
-	content?: (TextContent | ImageContent)[];
+	content?: PromptContentBlock[];
 	details?: unknown;
+	newMessages?: AgentMessage[];
 	isError?: boolean;
 }
 
@@ -1184,10 +1190,7 @@ export interface ExtensionAPI {
 	 * Send a user message to the agent. Always triggers a turn.
 	 * When the agent is streaming, use deliverAs to specify how to queue the message.
 	 */
-	sendUserMessage(
-		content: string | (TextContent | ImageContent)[],
-		options?: { deliverAs?: "steer" | "followUp" },
-	): void;
+	sendUserMessage(content: string | PromptContentBlock[], options?: { deliverAs?: "steer" | "followUp" }): void;
 
 	/** Append a custom entry to the session for state persistence (not sent to LLM). */
 	appendEntry<T = unknown>(customType: string, data?: T): void;
@@ -1362,7 +1365,7 @@ export interface ProviderModelConfig {
 	/** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
 	thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
 	/** Supported input types. */
-	input: ("text" | "image")[];
+	input: ("text" | "image" | "document")[];
 	/** Cost per token (for tracking, can be 0). */
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	/** Maximum context window size in tokens. */
@@ -1410,7 +1413,7 @@ export type SendMessageHandler = <T = unknown>(
 ) => void;
 
 export type SendUserMessageHandler = (
-	content: string | (TextContent | ImageContent)[],
+	content: string | PromptContentBlock[],
 	options?: { deliverAs?: "steer" | "followUp" },
 ) => void;
 

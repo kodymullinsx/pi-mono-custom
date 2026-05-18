@@ -1,6 +1,7 @@
 import type {
 	AssistantMessage as AssistantMessageType,
 	ImageContent,
+	PromptContentBlock,
 	TextContent,
 	ToolCall,
 	ToolResultMessage as ToolResultMessageType,
@@ -17,7 +18,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 export type UserMessageWithAttachments = {
 	role: "user-with-attachments";
-	content: string | (TextContent | ImageContent)[];
+	content: string | PromptContentBlock[];
 	timestamp: number;
 	attachments?: Attachment[];
 };
@@ -56,7 +57,7 @@ export class UserMessage extends LitElement {
 		const content =
 			typeof this.message.content === "string"
 				? this.message.content
-				: this.message.content.find((c) => c.type === "text")?.text || "";
+				: this.message.content.find((c): c is TextContent => c.type === "text")?.text || "";
 
 		return html`
 			<div class="flex justify-start mx-4">
@@ -304,8 +305,8 @@ import type { Message } from "@earendil-works/pi-ai";
  * - Images become ImageContent blocks
  * - Documents with extractedText become TextContent blocks with filename header
  */
-export function convertAttachments(attachments: Attachment[]): (TextContent | ImageContent)[] {
-	const content: (TextContent | ImageContent)[] = [];
+export function convertAttachments(attachments: Attachment[]): PromptContentBlock[] {
+	const content: PromptContentBlock[] = [];
 	for (const attachment of attachments) {
 		if (attachment.type === "image") {
 			content.push({
@@ -357,7 +358,7 @@ export function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 		.map((m): Message | null => {
 			// Convert user-with-attachments to user message with content blocks
 			if (isUserMessageWithAttachments(m)) {
-				const textContent: (TextContent | ImageContent)[] =
+				const textContent: PromptContentBlock[] =
 					typeof m.content === "string" ? [{ type: "text", text: m.content }] : [...m.content];
 
 				if (m.attachments) {

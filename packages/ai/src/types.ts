@@ -243,6 +243,16 @@ export interface ImageContent {
 	mimeType: string; // e.g., "image/jpeg", "image/png"
 }
 
+export interface DocumentContent {
+	type: "document";
+	data: string; // base64 encoded document data
+	mimeType: string; // e.g., "application/pdf"
+	fileName?: string;
+}
+
+export type AttachmentContent = ImageContent | DocumentContent;
+export type PromptContentBlock = TextContent | AttachmentContent;
+
 export interface ToolCall {
 	type: "toolCall";
 	id: string;
@@ -267,10 +277,16 @@ export interface Usage {
 }
 
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+export type AttachmentRetryTarget = "document" | "image";
+
+export interface AssistantErrorMetadata {
+	local?: boolean;
+	attachmentRetryTargets?: AttachmentRetryTarget[];
+}
 
 export interface UserMessage {
 	role: "user";
-	content: string | (TextContent | ImageContent)[];
+	content: string | PromptContentBlock[];
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -286,6 +302,7 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	errorMetadata?: AssistantErrorMetadata;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -293,7 +310,7 @@ export interface ToolResultMessage<TDetails = any> {
 	role: "toolResult";
 	toolCallId: string;
 	toolName: string;
-	content: (TextContent | ImageContent)[]; // Supports text and images
+	content: PromptContentBlock[]; // Supports text, images, and documents
 	details?: TDetails;
 	isError: boolean;
 	timestamp: number; // Unix timestamp in milliseconds
@@ -301,11 +318,11 @@ export interface ToolResultMessage<TDetails = any> {
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 
-export type ImagesInputContent = TextContent | ImageContent;
-export type ImagesOutputContent = TextContent | ImageContent;
+export type ImageGenInputContent = TextContent | ImageContent;
+export type ImageGenOutputContent = TextContent | ImageContent;
 
 export interface ImagesContext {
-	input: ImagesInputContent[];
+	input: ImageGenInputContent[];
 }
 
 export type ImagesStopReason = "stop" | "error" | "aborted";
@@ -314,7 +331,7 @@ export interface AssistantImages {
 	api: ImagesApi;
 	provider: ImagesProvider;
 	model: string;
-	output: ImagesOutputContent[];
+	output: ImageGenOutputContent[];
 	responseId?: string;
 	usage?: Usage;
 	stopReason: ImagesStopReason;
@@ -537,7 +554,7 @@ export interface Model<TApi extends Api> {
 	 * Missing keys use provider defaults. null marks a level as unsupported.
 	 */
 	thinkingLevelMap?: ThinkingLevelMap;
-	input: ("text" | "image")[];
+	input: ("text" | "image" | "document")[];
 	cost: {
 		input: number; // $/million tokens
 		output: number; // $/million tokens

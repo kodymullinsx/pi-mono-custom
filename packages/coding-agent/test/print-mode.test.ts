@@ -99,11 +99,11 @@ describe("runPrintMode", () => {
 		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
 			mode: "text",
 			initialMessage: "Say done",
-			initialImages: images,
+			initialAttachments: images,
 		});
 
 		expect(exitCode).toBe(0);
-		expect(session.prompt).toHaveBeenCalledWith("Say done", { images });
+		expect(session.prompt).toHaveBeenCalledWith("Say done", { attachments: images });
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
 	});

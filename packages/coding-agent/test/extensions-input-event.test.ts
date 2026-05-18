@@ -50,7 +50,7 @@ describe("Input Event", () => {
 		);
 		const imgs = [{ type: "image" as const, data: "orig", mimeType: "image/png" }];
 		const result = await r.emitInput("hi", imgs, "interactive");
-		expect(result).toEqual({ action: "transform", text: "T:hi", images: imgs });
+		expect(result).toEqual({ action: "transform", text: "T:hi", attachments: imgs, images: imgs });
 	});
 
 	it("transforms and replaces images when provided", async () => {
@@ -61,7 +61,23 @@ describe("Input Event", () => {
 		expect(result).toEqual({
 			action: "transform",
 			text: "X",
+			attachments: [{ type: "image", data: "new", mimeType: "image/jpeg" }],
 			images: [{ type: "image", data: "new", mimeType: "image/jpeg" }],
+		});
+	});
+
+	it("transforms and preserves document attachments when provided", async () => {
+		const r = await createRunner(
+			`export default p => p.on("input", async () => ({ action: "transform", text: "X", attachments: [{ type: "document", data: "JVBERi0xLjQ=", mimeType: "application/pdf", fileName: "evidence.pdf" }] }));`,
+		);
+		const result = await r.emitInput("hi", undefined, "interactive");
+		expect(result).toEqual({
+			action: "transform",
+			text: "X",
+			attachments: [
+				{ type: "document", data: "JVBERi0xLjQ=", mimeType: "application/pdf", fileName: "evidence.pdf" },
+			],
+			images: [],
 		});
 	});
 
@@ -71,7 +87,7 @@ describe("Input Event", () => {
 			`export default p => p.on("input", async e => ({ action: "transform", text: e.text + "[2]" }));`,
 		);
 		const result = await r.emitInput("X", undefined, "interactive");
-		expect(result).toEqual({ action: "transform", text: "X[1][2]", images: undefined });
+		expect(result).toEqual({ action: "transform", text: "X[1][2]", attachments: undefined, images: undefined });
 	});
 
 	it("short-circuits on handled and skips subsequent handlers", async () => {

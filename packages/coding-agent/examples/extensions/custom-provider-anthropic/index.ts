@@ -30,11 +30,11 @@ import {
 	type Context,
 	calculateCost,
 	createAssistantMessageEventStream,
-	type ImageContent,
 	type Message,
 	type Model,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
+	type PromptContentBlock,
 	type SimpleStreamOptions,
 	type StopReason,
 	type TextContent,
@@ -186,7 +186,7 @@ function sanitizeSurrogates(text: string): string {
 }
 
 function convertContentBlocks(
-	content: (TextContent | ImageContent)[],
+	content: PromptContentBlock[],
 ): string | Array<{ type: "text"; text: string } | { type: "image"; source: any }> {
 	const hasImages = content.some((c) => c.type === "image");
 	if (!hasImages) {

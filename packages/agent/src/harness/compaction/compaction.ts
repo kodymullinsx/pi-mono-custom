@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, PromptContentBlock, Usage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
@@ -64,7 +64,7 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
 	if (entry.type === "custom_message") {
 		return createCustomMessage(
 			entry.customType,
-			entry.content as string | (TextContent | ImageContent)[],
+			entry.content as string | PromptContentBlock[],
 			entry.display,
 			entry.details,
 			entry.timestamp,
@@ -204,13 +204,16 @@ export function estimateTokens(message: AgentMessage): number {
 
 	switch (message.role) {
 		case "user": {
-			const content = (message as { content: string | Array<{ type: string; text?: string }> }).content;
+			const content = (message as { content: string | PromptContentBlock[] }).content;
 			if (typeof content === "string") {
 				chars = content.length;
 			} else if (Array.isArray(content)) {
 				for (const block of content) {
-					if (block.type === "text" && block.text) {
+					if (block.type === "text") {
 						chars += block.text.length;
+					}
+					if (block.type === "image" || block.type === "document") {
+						chars += 4800;
 					}
 				}
 			}
@@ -235,10 +238,10 @@ export function estimateTokens(message: AgentMessage): number {
 				chars = message.content.length;
 			} else {
 				for (const block of message.content) {
-					if (block.type === "text" && block.text) {
+					if (block.type === "text") {
 						chars += block.text.length;
 					}
-					if (block.type === "image") {
+					if (block.type === "image" || block.type === "document") {
 						chars += 4800;
 					}
 				}
