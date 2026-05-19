@@ -30,6 +30,7 @@ import type {
 	Context,
 	DocumentContent,
 	Model,
+	PromptContentBlock,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -42,6 +43,12 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
+import {
+	AttachmentSerializationError,
+	getAssistantErrorMetadata,
+	sanitizeAttachmentMimeType,
+	sanitizeDocumentDisplayName,
+} from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.js";
@@ -258,6 +265,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatBedrockError(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -625,19 +633,8 @@ function convertMessages(
 					content.push({ text: sanitizeSurrogates(m.content) });
 				} else {
 					for (const c of m.content) {
-						switch (c.type) {
-							case "text":
-								content.push({ text: sanitizeSurrogates(c.text) });
-								break;
-							case "image":
-								content.push({ image: createImageBlock(c.mimeType, c.data) });
-								break;
-							case "document":
-								content.push({ document: createDocumentBlock(c) });
-								break;
-							default:
-								continue;
-						}
+						const block = convertAttachmentToBedrockBlock(c);
+						if (block) content.push(block);
 					}
 				}
 				if (content.length === 0) continue;
@@ -715,38 +712,22 @@ function convertMessages(
 				// Bedrock requires all tool results to be in one message
 				const toolResults: ContentBlock.ToolResultMember[] = [];
 
-				// Add current tool result with all content blocks combined
-				toolResults.push({
+				const buildToolResult = (toolMsg: ToolResultMessage): ContentBlock.ToolResultMember => ({
 					toolResult: {
-						toolUseId: m.toolCallId,
-						content: m.content.map((c) =>
-							c.type === "image"
-								? { image: createImageBlock(c.mimeType, c.data) }
-								: c.type === "document"
-									? { document: createDocumentBlock(c) }
-									: { text: sanitizeSurrogates(c.text) },
-						),
-						status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
+						toolUseId: toolMsg.toolCallId,
+						content: toolMsg.content
+							.map((c) => convertAttachmentToBedrockBlock(c))
+							.filter((b): b is NonNullable<typeof b> => b !== null),
+						status: toolMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
 					},
 				});
+
+				toolResults.push(buildToolResult(m));
 
 				// Look ahead for consecutive toolResult messages
 				let j = i + 1;
 				while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-					const nextMsg = transformedMessages[j] as ToolResultMessage;
-					toolResults.push({
-						toolResult: {
-							toolUseId: nextMsg.toolCallId,
-							content: nextMsg.content.map((c) =>
-								c.type === "image"
-									? { image: createImageBlock(c.mimeType, c.data) }
-									: c.type === "document"
-										? { document: createDocumentBlock(c) }
-										: { text: sanitizeSurrogates(c.text) },
-							),
-							status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
-						},
-					});
+					toolResults.push(buildToolResult(transformedMessages[j] as ToolResultMessage));
 					j++;
 				}
 
@@ -928,67 +909,77 @@ function buildAdditionalModelRequestFields(
 	return undefined;
 }
 
-function getDocumentFormat(
-	mimeType: string,
-	fileName?: string,
-): "csv" | "doc" | "docx" | "html" | "md" | "pdf" | "txt" | "xls" | "xlsx" | undefined {
-	switch (mimeType) {
-		case "application/pdf":
-			return "pdf";
-		case "application/msword":
-			return "doc";
-		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-			return "docx";
-		case "text/html":
-			return "html";
-		case "text/markdown":
-			return "md";
-		case "text/plain":
-			return "txt";
-		case "text/csv":
-			return "csv";
-		case "application/vnd.ms-excel":
-			return "xls";
-		case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-			return "xlsx";
-		default: {
-			const lowerName = fileName?.toLowerCase();
-			if (!lowerName) return undefined;
-			if (lowerName.endsWith(".pdf")) return "pdf";
-			if (lowerName.endsWith(".docx")) return "docx";
-			if (lowerName.endsWith(".doc")) return "doc";
-			if (lowerName.endsWith(".xlsx")) return "xlsx";
-			if (lowerName.endsWith(".xls")) return "xls";
-			if (lowerName.endsWith(".csv")) return "csv";
-			if (lowerName.endsWith(".md")) return "md";
-			if (lowerName.endsWith(".html") || lowerName.endsWith(".htm")) return "html";
-			if (lowerName.endsWith(".txt")) return "txt";
-			return undefined;
-		}
-	}
+type BedrockDocumentFormat = "csv" | "doc" | "docx" | "html" | "md" | "pdf" | "txt" | "xls" | "xlsx";
+
+const BEDROCK_DOCUMENT_FORMAT_BY_MIME: Record<string, BedrockDocumentFormat> = {
+	"application/pdf": "pdf",
+	"application/msword": "doc",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+	"text/html": "html",
+	"text/markdown": "md",
+	"text/plain": "txt",
+	"text/csv": "csv",
+	"application/vnd.ms-excel": "xls",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+};
+
+const BEDROCK_DOCUMENT_NAME_MAX_LENGTH = 64;
+// Strict base64: non-empty, total length multiple of 4, valid padding.
+// Matches "abcd", "abcd+/==", but rejects "", "abc", or anything with non-base64 chars.
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/;
+
+function getDocumentFormat(mimeType: string): BedrockDocumentFormat | undefined {
+	return BEDROCK_DOCUMENT_FORMAT_BY_MIME[mimeType];
 }
 
-function sanitizeDocumentName(fileName?: string): string {
-	const safeName = (fileName ?? "document")
+function sanitizeBedrockDocumentName(fileName: string | undefined): string {
+	const stripped = (fileName ?? "")
 		.replace(/[^A-Za-z0-9 \-()[\]]+/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
-	return safeName.length > 0 ? safeName : "document";
+	const safe = stripped.length > 0 ? stripped : "document";
+	return safe.length > BEDROCK_DOCUMENT_NAME_MAX_LENGTH ? safe.slice(0, BEDROCK_DOCUMENT_NAME_MAX_LENGTH) : safe;
 }
 
 function createDocumentBlock(block: DocumentContent) {
-	const format = getDocumentFormat(block.mimeType, block.fileName);
+	const format = getDocumentFormat(block.mimeType);
 	if (!format) {
-		throw new Error(`Unknown document type: ${block.mimeType}`);
+		throw new AttachmentSerializationError(
+			`Bedrock does not support documents with MIME type "${sanitizeAttachmentMimeType(block.mimeType)}" (${sanitizeDocumentDisplayName(block.fileName)}). Supported types: ${Object.keys(BEDROCK_DOCUMENT_FORMAT_BY_MIME).join(", ")}.`,
+			["document"],
+		);
 	}
-
+	if (!BASE64_PATTERN.test(block.data)) {
+		throw new AttachmentSerializationError(
+			`Bedrock document "${sanitizeDocumentDisplayName(block.fileName)}" has invalid base64 payload.`,
+			["document"],
+		);
+	}
 	return {
 		format,
-		name: sanitizeDocumentName(block.fileName),
+		name: sanitizeBedrockDocumentName(block.fileName),
 		source: {
 			bytes: Buffer.from(block.data, "base64"),
 		},
 	};
+}
+
+type BedrockAttachmentBlock =
+	| { text: string }
+	| { image: ReturnType<typeof createImageBlock> }
+	| { document: ReturnType<typeof createDocumentBlock> };
+
+function convertAttachmentToBedrockBlock(block: PromptContentBlock): BedrockAttachmentBlock | null {
+	switch (block.type) {
+		case "text":
+			return { text: sanitizeSurrogates(block.text) };
+		case "image":
+			return { image: createImageBlock(block.mimeType, block.data) };
+		case "document":
+			return { document: createDocumentBlock(block) };
+		default:
+			return null;
+	}
 }
 
 function createImageBlock(mimeType: string, data: string) {

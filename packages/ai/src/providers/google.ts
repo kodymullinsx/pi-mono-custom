@@ -20,6 +20,7 @@ import type {
 	ThinkingLevel,
 	ToolCall,
 } from "../types.js";
+import { getAssistantErrorMetadata } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import type { GoogleThinkingLevel } from "./google-shared.js";
@@ -267,6 +268,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

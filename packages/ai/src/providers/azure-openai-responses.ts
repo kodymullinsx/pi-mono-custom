@@ -264,6 +264,7 @@ function buildParams(
 		input: messages,
 		stream: true,
 		prompt_cache_key: options?.sessionId,
+		store: false,
 	};
 
 	if (options?.maxTokens) {

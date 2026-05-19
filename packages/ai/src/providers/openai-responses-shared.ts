@@ -28,7 +28,7 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.js";
-import { formatDocumentSummary, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
+import { sanitizeAttachmentMimeType, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -155,7 +155,7 @@ export function convertResponsesMessages<TApi extends Api>(
 					return {
 						type: "input_image",
 						detail: "auto",
-						image_url: `data:${item.mimeType};base64,${item.data}`,
+						image_url: `data:${sanitizeAttachmentMimeType(item.mimeType)};base64,${item.data}`,
 					} satisfies ResponseInputImage;
 				});
 				if (content.length === 0) continue;
@@ -220,30 +220,22 @@ export function convertResponsesMessages<TApi extends Api>(
 			if (output.length === 0) continue;
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
-			const textResult = msg.content
-				.map((c) => {
-					if (c.type === "text") {
-						return c.text;
-					}
-					if (c.type === "document") {
-						return formatDocumentSummary(c);
-					}
-					return null;
-				})
-				.filter((c): c is string => c !== null)
-				.join("\n");
 			const documentBlock = msg.content.find((c): c is DocumentContent => c.type === "document");
+			if (documentBlock) {
+				throwUnsupportedDocumentSerialization(documentBlock, "tool results");
+			}
 			const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
+			const textResult = msg.content
+				.filter((c): c is TextContent => c.type === "text")
+				.map((c) => c.text)
+				.join("\n");
 			const hasText = textResult.length > 0;
 			const [callId] = msg.toolCallId.split("|");
-			const toolResultText = hasText ? textResult : "(see attached image)";
+			const toolResultText = hasText ? textResult : "(see attached file)";
 			const serializedToolResultText =
 				msg.isError && !/^error:/i.test(toolResultText) ? `Error: ${toolResultText}` : toolResultText;
 
 			let output: string | ResponseFunctionCallOutputItemList;
-			if (documentBlock) {
-				throwUnsupportedDocumentSerialization(documentBlock, "tool results");
-			}
 			if (hasImages && model.input.includes("image")) {
 				const contentParts: ResponseFunctionCallOutputItemList = [];
 
@@ -259,7 +251,7 @@ export function convertResponsesMessages<TApi extends Api>(
 						contentParts.push({
 							type: "input_image",
 							detail: "auto",
-							image_url: `data:${block.mimeType};base64,${block.data}`,
+							image_url: `data:${sanitizeAttachmentMimeType(block.mimeType)};base64,${block.data}`,
 						});
 					}
 				}

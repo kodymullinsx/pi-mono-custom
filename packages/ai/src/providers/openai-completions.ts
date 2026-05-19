@@ -31,7 +31,11 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
-import { getAssistantErrorMetadata, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
+import {
+	getAssistantErrorMetadata,
+	sanitizeAttachmentMimeType,
+	throwUnsupportedDocumentSerialization,
+} from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -805,7 +809,7 @@ export function convertMessages(
 						return {
 							type: "image_url",
 							image_url: {
-								url: `data:${item.mimeType};base64,${item.data}`,
+								url: `data:${sanitizeAttachmentMimeType(item.mimeType)};base64,${item.data}`,
 							},
 						} satisfies ChatCompletionContentPartImage;
 					}
@@ -941,7 +945,7 @@ export function convertMessages(
 				// Some providers require the 'name' field in tool results
 				const toolResultMsg: ChatCompletionToolMessageParam = {
 					role: "tool",
-					content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+					content: sanitizeSurrogates(hasText ? textResult : "(see attached file)"),
 					tool_call_id: toolMsg.toolCallId,
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {
@@ -955,7 +959,7 @@ export function convertMessages(
 							imageBlocks.push({
 								type: "image_url",
 								image_url: {
-									url: `data:${block.mimeType};base64,${block.data}`,
+									url: `data:${sanitizeAttachmentMimeType(block.mimeType)};base64,${block.data}`,
 								},
 							});
 						}

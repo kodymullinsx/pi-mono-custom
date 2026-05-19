@@ -7,32 +7,49 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
+import { formatDocumentSummary } from "../utils/document-utils.js";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 
-function replaceImagesWithPlaceholder(content: PromptContentBlock[], placeholder: string): PromptContentBlock[] {
+function downgradeAttachmentBlocks(
+	content: PromptContentBlock[],
+	imagePlaceholder: string,
+	options: { downgradeImages: boolean; downgradeDocuments: boolean },
+): PromptContentBlock[] {
 	const result: PromptContentBlock[] = [];
-	let previousWasPlaceholder = false;
+	let previousPlaceholder: string | null = null;
+
+	const pushPlaceholder = (text: string) => {
+		if (previousPlaceholder !== text) {
+			result.push({ type: "text", text });
+		}
+		previousPlaceholder = text;
+	};
 
 	for (const block of content) {
-		if (block.type === "image") {
-			if (!previousWasPlaceholder) {
-				result.push({ type: "text", text: placeholder });
-			}
-			previousWasPlaceholder = true;
+		if (options.downgradeImages && block.type === "image") {
+			pushPlaceholder(imagePlaceholder);
+			continue;
+		}
+
+		if (options.downgradeDocuments && block.type === "document") {
+			pushPlaceholder(formatDocumentSummary(block));
 			continue;
 		}
 
 		result.push(block);
-		previousWasPlaceholder = block.type === "text" && block.text === placeholder;
+		previousPlaceholder = block.type === "text" ? block.text : null;
 	}
 
 	return result;
 }
 
-function downgradeUnsupportedImages<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
-	if (model.input.includes("image")) {
+function downgradeUnsupportedAttachments<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
+	const downgradeImages = !model.input.includes("image");
+	const downgradeDocuments = !model.input.includes("document");
+
+	if (!downgradeImages && !downgradeDocuments) {
 		return messages;
 	}
 
@@ -40,14 +57,20 @@ function downgradeUnsupportedImages<TApi extends Api>(messages: Message[], model
 		if (msg.role === "user" && Array.isArray(msg.content)) {
 			return {
 				...msg,
-				content: replaceImagesWithPlaceholder(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER),
+				content: downgradeAttachmentBlocks(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER, {
+					downgradeImages,
+					downgradeDocuments,
+				}),
 			};
 		}
 
 		if (msg.role === "toolResult") {
 			return {
 				...msg,
-				content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),
+				content: downgradeAttachmentBlocks(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER, {
+					downgradeImages,
+					downgradeDocuments,
+				}),
 			};
 		}
 
@@ -67,10 +90,10 @@ export function transformMessages<TApi extends Api>(
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
-	const imageAwareMessages = downgradeUnsupportedImages(messages, model);
+	const attachmentAwareMessages = downgradeUnsupportedAttachments(messages, model);
 
-	// First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
-	const transformed = imageAwareMessages.map((msg) => {
+	// First pass: transform messages (attachment downgrades, thinking blocks, tool call ID normalization)
+	const transformed = attachmentAwareMessages.map((msg) => {
 		// User messages pass through unchanged
 		if (msg.role === "user") {
 			return msg;
