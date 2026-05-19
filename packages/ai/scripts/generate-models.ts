@@ -261,6 +261,28 @@ function getBedrockBaseUrl(modelId: string): string {
 		: "https://bedrock-runtime.us-east-1.amazonaws.com";
 }
 
+// APIs whose providers in this package can serialize first-class document
+// (PDF) attachments. Other APIs (openai-completions, openai-responses,
+// mistral-conversations) call throwUnsupportedDocumentSerialization from
+// their convertMessages path, so we must keep "document" out of Model.input
+// for those — otherwise transformMessages won't downgrade and the request
+// will fail before reaching the model.
+const APIS_WITH_DOCUMENT_SUPPORT = new Set<Api>([
+	"anthropic-messages",
+	"bedrock-converse-stream",
+	"google-generative-ai",
+	"google-vertex",
+]);
+
+type ModelInputModality = "text" | "image" | "document";
+
+function buildInputModalities(api: Api, rawInput: string[] | undefined): ModelInputModality[] {
+	const input: ModelInputModality[] = ["text"];
+	if (rawInput?.includes("image")) input.push("image");
+	if (rawInput?.includes("pdf") && APIS_WITH_DOCUMENT_SUPPORT.has(api)) input.push("document");
+	return input;
+}
+
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
@@ -279,8 +301,10 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 
 			modelKey = model.id; // Keep full ID for OpenRouter
 
-			// Parse input modalities
-			const input: ("text" | "image")[] = ["text"];
+			// Parse input modalities. OpenRouter routes through openai-completions,
+			// which cannot serialize documents — keep "document" off until/unless
+			// the provider learns the OpenRouter file_id path.
+			const input: ModelInputModality[] = ["text"];
 			if (model.architecture?.modality?.includes("image")) {
 				input.push("image");
 			}
@@ -340,9 +364,14 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 			// Only include models that support tools
 			if (!tags.includes("tool-use")) continue;
 
-			const input: ("text" | "image")[] = ["text"];
+			const input: ModelInputModality[] = ["text"];
 			if (tags.includes("vision")) {
 				input.push("image");
+			}
+			// Vercel AI Gateway tags PDF-capable models as "file-input"; gateway
+			// fronts an anthropic-messages API which supports documents.
+			if (tags.includes("file-input")) {
+				input.push("document");
 			}
 
 			const inputCost = toNumber(model.pricing?.input) * 1_000_000;
@@ -410,7 +439,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "amazon-bedrock" as const,
 					baseUrl: getBedrockBaseUrl(id),
 					reasoning: m.reasoning === true,
-					input: (m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"]) as ("text" | "image")[],
+					input: buildInputModalities("bedrock-converse-stream", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -436,7 +465,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "anthropic",
 					baseUrl: "https://api.anthropic.com",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("anthropic-messages", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -462,7 +491,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "google",
 					baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("google-generative-ai", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -488,7 +517,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "openai",
 					baseUrl: "https://api.openai.com/v1",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-responses", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -514,7 +543,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "groq",
 					baseUrl: "https://api.groq.com/openai/v1",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -540,7 +569,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "cerebras",
 					baseUrl: "https://api.cerebras.ai/v1",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -566,7 +595,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "cloudflare-workers-ai",
 					baseUrl: CLOUDFLARE_WORKERS_AI_BASE_URL,
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -621,7 +650,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "cloudflare-ai-gateway",
 					baseUrl,
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities(api, m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -648,7 +677,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "xai",
 					baseUrl: "https://api.x.ai/v1",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -666,7 +695,6 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			for (const [modelId, model] of Object.entries(data["zai-coding-plan"].models)) {
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
-				const supportsImage = m.modalities?.input?.includes("image");
 
 				models.push({
 					id: modelId,
@@ -675,7 +703,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "zai",
 					baseUrl: "https://api.z.ai/api/coding/paas/v4",
 					reasoning: m.reasoning === true,
-					input: supportsImage ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -706,7 +734,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "mistral",
 					baseUrl: "https://api.mistral.ai",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("mistral-conversations", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -732,7 +760,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "huggingface",
 					baseUrl: "https://router.huggingface.co/v1",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -762,7 +790,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					// Fireworks Anthropic-compatible API - SDK appends /v1/messages
 					baseUrl: "https://api.fireworks.ai/inference",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("anthropic-messages", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -803,7 +831,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: TOGETHER_BASE_URL,
 					reasoning,
 					...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -888,7 +916,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: variant.provider,
 					baseUrl,
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities(api, m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -930,7 +958,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "github-copilot",
 					baseUrl: "https://api.individual.githubcopilot.com",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities(api, m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -975,7 +1003,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						// MiniMax's Anthropic-compatible API - SDK appends /v1/messages
 						baseUrl,
 						reasoning: m.reasoning === true,
-						input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+						input: buildInputModalities("anthropic-messages", m.modalities?.input),
 						cost: {
 							input: m.cost?.input || 0,
 							output: m.cost?.output || 0,
@@ -1015,7 +1043,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.kimi.com/coding",
 					headers: { ...KIMI_STATIC_HEADERS },
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("anthropic-messages", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -1055,7 +1083,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider,
 					baseUrl,
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("openai-completions", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -1093,7 +1121,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						provider,
 						baseUrl,
 						reasoning: m.reasoning === true,
-						input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+						input: buildInputModalities("openai-completions", m.modalities?.input),
 						cost: {
 							input: m.cost?.input || 0,
 							output: m.cost?.output || 0,
@@ -1839,6 +1867,27 @@ async function generateModels() {
 
 	for (const model of allModels) {
 		applyThinkingLevelMetadata(model);
+	}
+
+	// Promote document support for image-capable models on first-party providers
+	// that we've verified accept PDF documents end-to-end. Third-party providers
+	// (Fireworks, Cloudflare gateways, Vercel gateway, etc.) relay anthropic-messages
+	// or google-generative-ai but may not handle PDF blocks, so leave them as-is.
+	const FIRST_PARTY_DOC_PROVIDERS: Record<string, Set<string>> = {
+		"anthropic-messages": new Set(["anthropic"]),
+		"google-generative-ai": new Set(["google"]),
+		"google-vertex": new Set(["google-vertex"]),
+		"bedrock-converse-stream": new Set(["amazon-bedrock"]),
+	};
+	for (const model of allModels) {
+		const allowedProviders = FIRST_PARTY_DOC_PROVIDERS[model.api];
+		if (
+			allowedProviders?.has(model.provider) &&
+			model.input.includes("image") &&
+			!model.input.includes("document")
+		) {
+			model.input = [...model.input, "document"];
+		}
 	}
 
 	// Group by provider and deduplicate by model ID

@@ -22,6 +22,7 @@ import type {
 	Tool,
 	ToolCall,
 } from "../types.js";
+import { getAssistantErrorMetadata, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -97,6 +98,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -491,9 +493,10 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 			}
 			const hadImages = msg.content.some((item) => item.type === "image");
 			const content: ContentChunk[] = msg.content
-				.filter((item) => item.type === "text" || supportsImages)
+				.filter((item) => item.type === "text" || supportsImages || item.type === "document")
 				.map((item) => {
 					if (item.type === "text") return { type: "text", text: sanitizeSurrogates(item.text) };
+					if (item.type === "document") return throwUnsupportedDocumentSerialization(item, "user messages");
 					return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
 				});
 			if (content.length > 0) {
@@ -540,6 +543,10 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 			continue;
 		}
 
+		const documentBlock = msg.content.find((part) => part.type === "document");
+		if (documentBlock) {
+			throwUnsupportedDocumentSerialization(documentBlock, "tool results");
+		}
 		const toolContent: ContentChunk[] = [];
 		const textResult = msg.content
 			.filter((part) => part.type === "text")

@@ -27,7 +27,12 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
-import { canInlineDocument, formatDocumentSummary } from "../utils/document-utils.js";
+import {
+	canInlineDocument,
+	formatDocumentSummary,
+	getAssistantErrorMetadata,
+	sanitizeDocumentDisplayName,
+} from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
@@ -163,7 +168,7 @@ function convertContentBlocks(content: PromptContentBlock[]):
 					media_type: "application/pdf" as const,
 					data: block.data,
 				},
-				...(block.fileName ? { title: block.fileName } : {}),
+				...(block.fileName ? { title: sanitizeDocumentDisplayName(block.fileName) } : {}),
 			};
 		}
 
@@ -705,6 +710,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -1156,7 +1162,10 @@ function convertMessages(
 				const lastBlock = lastMessage.content[lastMessage.content.length - 1];
 				if (
 					lastBlock &&
-					(lastBlock.type === "text" || lastBlock.type === "image" || lastBlock.type === "tool_result")
+					(lastBlock.type === "text" ||
+						lastBlock.type === "image" ||
+						lastBlock.type === "document" ||
+						lastBlock.type === "tool_result")
 				) {
 					(lastBlock as any).cache_control = cacheControl;
 				}

@@ -12,7 +12,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.33,
 				output: 2.75,
@@ -29,7 +29,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.06,
 				output: 0.24,
@@ -63,7 +63,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.8,
 				output: 3.2,
@@ -80,7 +80,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -97,7 +97,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -114,7 +114,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -132,7 +132,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -150,7 +150,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -167,7 +167,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -184,7 +184,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -201,7 +201,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -219,7 +219,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 16.5,
 				output: 82.5,
@@ -236,7 +236,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -253,7 +253,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3.3,
 				output: 16.5,
@@ -321,7 +321,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -338,7 +338,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -356,7 +356,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -374,7 +374,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -391,7 +391,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -408,7 +408,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -425,7 +425,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -442,7 +442,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -460,7 +460,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -478,7 +478,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -495,7 +495,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -512,7 +512,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -529,7 +529,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.12,
 				output: 0.2,
@@ -546,7 +546,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.04,
 				output: 0.08,
@@ -564,7 +564,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -581,7 +581,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -598,7 +598,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -666,7 +666,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.24,
 				output: 0.97,
@@ -683,7 +683,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.17,
 				output: 0.66,
@@ -768,7 +768,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 1.5,
@@ -802,7 +802,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.1,
@@ -836,7 +836,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 1.5,
@@ -853,7 +853,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 6,
@@ -921,7 +921,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.6,
 				output: 3,
@@ -938,7 +938,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.2,
 				output: 0.6,
@@ -1176,7 +1176,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 1.5,
@@ -1193,7 +1193,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -1210,7 +1210,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -1227,7 +1227,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -1245,7 +1245,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -1263,7 +1263,7 @@ export const MODELS = {
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -1280,7 +1280,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1297,7 +1297,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1331,7 +1331,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.24,
 				output: 0.97,
@@ -1348,7 +1348,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.17,
 				output: 0.66,
@@ -1452,7 +1452,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.8,
 				output: 4,
@@ -1469,7 +1469,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.8,
 				output: 4,
@@ -1486,7 +1486,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1503,7 +1503,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1520,7 +1520,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1537,7 +1537,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 1.25,
@@ -1554,7 +1554,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -1571,7 +1571,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1588,7 +1588,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -1605,7 +1605,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -1622,7 +1622,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -1639,7 +1639,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -1656,7 +1656,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -1673,7 +1673,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -1690,7 +1690,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -1707,7 +1707,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -1725,7 +1725,7 @@ export const MODELS = {
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -1743,7 +1743,7 @@ export const MODELS = {
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -1760,7 +1760,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1777,7 +1777,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1794,7 +1794,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1811,7 +1811,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -1828,7 +1828,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -2657,7 +2657,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.8,
 				output: 4,
@@ -2674,7 +2674,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 1.25,
@@ -2691,7 +2691,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -2708,7 +2708,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -2725,7 +2725,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.8,
 				output: 4,
@@ -2742,7 +2742,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -2759,7 +2759,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -2776,7 +2776,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -2793,7 +2793,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -2810,7 +2810,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -2828,7 +2828,7 @@ export const MODELS = {
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -2846,7 +2846,7 @@ export const MODELS = {
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -2863,7 +2863,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -2880,7 +2880,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -2897,7 +2897,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -4158,7 +4158,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.075,
 				output: 0.3,
@@ -4175,7 +4175,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.0375,
 				output: 0.15,
@@ -4192,7 +4192,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 5,
@@ -4209,7 +4209,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.4,
@@ -4226,7 +4226,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.075,
 				output: 0.3,
@@ -4243,7 +4243,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 2.5,
@@ -4260,7 +4260,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.4,
@@ -4277,7 +4277,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.4,
@@ -4294,7 +4294,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.4,
@@ -4311,7 +4311,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.15,
 				output: 0.6,
@@ -4328,7 +4328,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.15,
 				output: 0.6,
@@ -4345,7 +4345,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 2.5,
@@ -4362,7 +4362,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -4379,7 +4379,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -4396,7 +4396,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -4414,7 +4414,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 3,
@@ -4432,7 +4432,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -4450,7 +4450,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 1.5,
@@ -4468,7 +4468,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 1.5,
@@ -4486,7 +4486,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -4504,7 +4504,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -4521,7 +4521,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 2.5,
@@ -4538,7 +4538,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.4,
@@ -4555,7 +4555,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 2,
@@ -4589,7 +4589,7 @@ export const MODELS = {
 			provider: "google",
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0,
 				output: 0,
@@ -4607,7 +4607,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":"MINIMAL","low":null,"medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0,
 				output: 0,
@@ -4625,7 +4625,7 @@ export const MODELS = {
 			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":"MINIMAL","low":null,"medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0,
 				output: 0,
@@ -4644,7 +4644,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.075,
 				output: 0.3,
@@ -4661,7 +4661,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.0375,
 				output: 0.15,
@@ -4678,7 +4678,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 5,
@@ -4695,7 +4695,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.15,
 				output: 0.6,
@@ -4712,7 +4712,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.075,
 				output: 0.3,
@@ -4729,7 +4729,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 2.5,
@@ -4746,7 +4746,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.4,
@@ -4763,7 +4763,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.1,
 				output: 0.4,
@@ -4780,7 +4780,7 @@ export const MODELS = {
 			provider: "google-vertex",
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -4798,7 +4798,7 @@ export const MODELS = {
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
 			thinkingLevelMap: {"off":null},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 3,
@@ -4816,7 +4816,7 @@ export const MODELS = {
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -4834,7 +4834,7 @@ export const MODELS = {
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -4852,7 +4852,7 @@ export const MODELS = {
 			baseUrl: "https://{location}-aiplatform.googleapis.com",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -7268,9 +7268,9 @@ export const MODELS = {
 		"big-pickle": {
 			id: "big-pickle",
 			name: "Big Pickle",
-			api: "anthropic-messages",
+			api: "openai-completions",
 			provider: "opencode",
-			baseUrl: "https://opencode.ai/zen",
+			baseUrl: "https://opencode.ai/zen/v1",
 			reasoning: true,
 			input: ["text"],
 			cost: {
@@ -7281,7 +7281,7 @@ export const MODELS = {
 			},
 			contextWindow: 200000,
 			maxTokens: 128000,
-		} satisfies Model<"anthropic-messages">,
+		} satisfies Model<"openai-completions">,
 		"claude-haiku-4-5": {
 			id: "claude-haiku-4-5",
 			name: "Claude Haiku 4.5",
@@ -7289,7 +7289,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -7306,7 +7306,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -7323,7 +7323,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -7341,7 +7341,7 @@ export const MODELS = {
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -7359,7 +7359,7 @@ export const MODELS = {
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -7376,7 +7376,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -7393,7 +7393,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -7410,7 +7410,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -7447,7 +7447,7 @@ export const MODELS = {
 			baseUrl: "https://opencode.ai/zen/v1",
 			reasoning: true,
 			thinkingLevelMap: {"off":null},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 3,
@@ -7465,7 +7465,7 @@ export const MODELS = {
 			baseUrl: "https://opencode.ai/zen/v1",
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -13074,7 +13074,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.3,
 				output: 7.8,
@@ -13091,7 +13091,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.39999999999999997,
 				output: 4,
@@ -13227,7 +13227,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.39999999999999997,
 				output: 4,
@@ -13244,7 +13244,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.09999999999999999,
 				output: 0.39999999999999997,
@@ -13261,7 +13261,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.39999999999999997,
 				output: 2.4,
@@ -13278,7 +13278,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.6,
 				output: 3.5999999999999996,
@@ -13295,7 +13295,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 3,
@@ -13329,7 +13329,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.7999999999999999,
 				output: 4,
@@ -13346,7 +13346,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 5,
@@ -13363,7 +13363,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -13380,7 +13380,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 75,
@@ -13397,7 +13397,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -13415,7 +13415,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -13433,7 +13433,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 25,
@@ -13450,7 +13450,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -13467,7 +13467,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -13484,7 +13484,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 3,
 				output: 15,
@@ -13705,7 +13705,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.15,
 				output: 0.6,
@@ -13722,7 +13722,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.075,
 				output: 0.3,
@@ -13739,7 +13739,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 2.5,
@@ -13756,7 +13756,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.09999999999999999,
 				output: 0.39999999999999997,
@@ -13773,7 +13773,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -13790,7 +13790,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.5,
 				output: 3,
@@ -13807,7 +13807,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -13824,7 +13824,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 1.5,
@@ -13841,7 +13841,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 1.5,
@@ -13858,7 +13858,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 12,
@@ -13875,7 +13875,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.13,
 				output: 0.39999999999999997,
@@ -13892,7 +13892,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.14,
 				output: 0.39999999999999997,
@@ -14181,7 +14181,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 1.2,
@@ -14470,7 +14470,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.95,
 				output: 4,
@@ -14538,7 +14538,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 8,
@@ -14555,7 +14555,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.39999999999999997,
 				output: 1.5999999999999999,
@@ -14572,7 +14572,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.09999999999999999,
 				output: 0.39999999999999997,
@@ -14589,7 +14589,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2.5,
 				output: 10,
@@ -14606,7 +14606,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.15,
 				output: 0.6,
@@ -14623,7 +14623,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -14640,7 +14640,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -14657,7 +14657,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text"],
+			input: ["text", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -14674,7 +14674,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 2,
@@ -14691,7 +14691,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.049999999999999996,
 				output: 0.39999999999999997,
@@ -14708,7 +14708,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 120,
@@ -14725,7 +14725,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -14742,7 +14742,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -14759,7 +14759,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.25,
 				output: 2,
@@ -14776,7 +14776,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -14793,7 +14793,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 10,
@@ -14811,7 +14811,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.75,
 				output: 14,
@@ -14829,7 +14829,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.75,
 				output: 14,
@@ -14847,7 +14847,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.75,
 				output: 14,
@@ -14865,7 +14865,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 21,
 				output: 168,
@@ -14883,7 +14883,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.75,
 				output: 14,
@@ -14901,7 +14901,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.75,
 				output: 14,
@@ -14919,7 +14919,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2.5,
 				output: 15,
@@ -14937,7 +14937,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.75,
 				output: 4.5,
@@ -14955,7 +14955,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.19999999999999998,
 				output: 1.25,
@@ -14973,7 +14973,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 30,
 				output: 180,
@@ -14991,7 +14991,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 5,
 				output: 30,
@@ -15009,7 +15009,7 @@ export const MODELS = {
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 30,
 				output: 180,
@@ -15060,7 +15060,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 15,
 				output: 60,
@@ -15077,7 +15077,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 2,
 				output: 8,
@@ -15094,7 +15094,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 10,
 				output: 40,
@@ -15128,7 +15128,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 20,
 				output: 80,
@@ -15145,7 +15145,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.1,
 				output: 4.4,
@@ -15196,7 +15196,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.19999999999999998,
 				output: 0.5,
@@ -15213,7 +15213,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.19999999999999998,
 				output: 0.5,
@@ -15230,7 +15230,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 2.5,
@@ -15247,7 +15247,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 2.5,
@@ -15264,7 +15264,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 2.5,
@@ -15281,7 +15281,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 2.5,
@@ -15298,7 +15298,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 2.5,
@@ -15315,7 +15315,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 2.5,
@@ -15332,7 +15332,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.25,
 				output: 2.5,
@@ -15383,7 +15383,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.39999999999999997,
 				output: 2,
@@ -15400,7 +15400,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1,
 				output: 3,
@@ -15485,7 +15485,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0.3,
 				output: 0.8999999999999999,
@@ -15502,7 +15502,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 0,
 				output: 0,
@@ -15621,7 +15621,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			input: ["text", "image"],
+			input: ["text", "image", "document"],
 			cost: {
 				input: 1.2,
 				output: 4,

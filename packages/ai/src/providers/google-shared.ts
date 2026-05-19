@@ -185,26 +185,28 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				parts,
 			});
 		} else if (msg.role === "toolResult") {
-			// Extract text and media content
-			const textResult = msg.content
-				.map((c) => {
-					if (c.type === "text") {
-						return c.text;
-					}
-					if (c.type === "document" && !canInlineDocument(c)) {
-						return formatDocumentSummary(c);
-					}
-					return null;
-				})
-				.filter((c): c is string => c !== null)
-				.join("\n");
-			const imageContent = model.input.includes("image")
-				? msg.content.filter((c): c is ImageContent => c.type === "image")
-				: [];
-			const documentContent = model.input.includes("document")
-				? msg.content.filter((c): c is DocumentContent => c.type === "document" && canInlineDocument(c))
-				: [];
+			const supportsDocuments = model.input.includes("document");
+			const imageContent: ImageContent[] = [];
+			const documentContent: DocumentContent[] = [];
+			const textParts: string[] = [];
 
+			for (const c of msg.content) {
+				if (c.type === "text") {
+					textParts.push(c.text);
+				} else if (c.type === "image") {
+					if (model.input.includes("image")) {
+						imageContent.push(c);
+					}
+				} else if (c.type === "document") {
+					if (supportsDocuments && canInlineDocument(c)) {
+						documentContent.push(c);
+					} else {
+						textParts.push(formatDocumentSummary(c));
+					}
+				}
+			}
+
+			const textResult = textParts.join("\n");
 			const hasText = textResult.length > 0;
 			const hasImages = imageContent.length > 0;
 			const hasDocuments = documentContent.length > 0;
@@ -221,19 +223,13 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 					? "(see attached file)"
 					: "";
 
-			const imageParts: Part[] = imageContent.map((imageBlock) => ({
-				inlineData: {
-					mimeType: imageBlock.mimeType,
-					data: imageBlock.data,
-				},
-			}));
-			const documentParts: Part[] = documentContent.map((documentBlock) => ({
-				inlineData: {
-					mimeType: documentBlock.mimeType,
-					data: documentBlock.data,
-				},
-			}));
-			const mediaParts = [...imageParts, ...documentParts];
+			const mediaParts: Part[] = [];
+			for (const imageBlock of imageContent) {
+				mediaParts.push({ inlineData: { mimeType: imageBlock.mimeType, data: imageBlock.data } });
+			}
+			for (const documentBlock of documentContent) {
+				mediaParts.push({ inlineData: { mimeType: documentBlock.mimeType, data: documentBlock.data } });
+			}
 
 			const includeId = requiresToolCallId(model.id);
 			const functionResponsePart: Part = {
