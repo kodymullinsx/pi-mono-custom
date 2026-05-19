@@ -28,7 +28,7 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.js";
-import { throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
+import { sanitizeAttachmentMimeType, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -155,7 +155,7 @@ export function convertResponsesMessages<TApi extends Api>(
 					return {
 						type: "input_image",
 						detail: "auto",
-						image_url: `data:${item.mimeType};base64,${item.data}`,
+						image_url: `data:${sanitizeAttachmentMimeType(item.mimeType)};base64,${item.data}`,
 					} satisfies ResponseInputImage;
 				});
 				if (content.length === 0) continue;
@@ -251,7 +251,7 @@ export function convertResponsesMessages<TApi extends Api>(
 						contentParts.push({
 							type: "input_image",
 							detail: "auto",
-							image_url: `data:${block.mimeType};base64,${block.data}`,
+							image_url: `data:${sanitizeAttachmentMimeType(block.mimeType)};base64,${block.data}`,
 						});
 					}
 				}

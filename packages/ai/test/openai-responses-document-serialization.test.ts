@@ -1,15 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.js";
-import { convertMessages } from "../src/providers/openai-completions.js";
-import type {
-	AssistantMessage,
-	Context,
-	Model,
-	OpenAICompletionsCompat,
-	ToolResultMessage,
-	Usage,
-} from "../src/types.js";
+import { convertResponsesMessages } from "../src/providers/openai-responses-shared.js";
+import type { AssistantMessage, Context, Model, ToolResultMessage, Usage } from "../src/types.js";
 import { AttachmentSerializationError, getAssistantErrorMetadata } from "../src/utils/document-utils.js";
+
+const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -20,40 +15,27 @@ const emptyUsage: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const compat: Required<OpenAICompletionsCompat> = {
-	supportsStore: true,
-	supportsDeveloperRole: true,
-	supportsReasoningEffort: true,
-	supportsUsageInStreaming: true,
-	maxTokensField: "max_completion_tokens",
-	requiresToolResultName: false,
-	requiresAssistantAfterToolResult: false,
-	requiresThinkingAsText: false,
-	requiresReasoningContentOnAssistantMessages: false,
-	thinkingFormat: "openai",
-	openRouterRouting: {},
-	vercelGatewayRouting: {},
-	zaiToolStream: false,
-	supportsStrictMode: true,
-	cacheControlFormat: "anthropic",
-	sendSessionAffinityHeaders: false,
-	supportsLongCacheRetention: true,
-};
-
-function makeDocSupportingModel(): Model<"openai-completions"> {
+function makeDocSupportingResponsesModel(): Model<"openai-responses"> {
 	const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
 	return {
 		...base,
-		api: "openai-completions",
-		// Force documents into model.input so the transform layer does not pre-downgrade them.
-		// This exercises the serializer's throw path that propagates errorMetadata.
+		api: "openai-responses",
 		input: ["text", "image", "document"],
 	};
 }
 
-describe("openai-completions document serialization", () => {
+function makeImageOnlyResponsesModel(): Model<"openai-responses"> {
+	const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
+	return {
+		...base,
+		api: "openai-responses",
+		input: ["text", "image"],
+	};
+}
+
+describe("openai-responses-shared document serialization", () => {
 	it("throws AttachmentSerializationError with retryTargets=['document'] for user document blocks", () => {
-		const model = makeDocSupportingModel();
+		const model = makeDocSupportingResponsesModel();
 		const context: Context = {
 			messages: [
 				{
@@ -69,7 +51,7 @@ describe("openai-completions document serialization", () => {
 
 		let caught: unknown;
 		try {
-			convertMessages(model, context, compat);
+			convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
 		} catch (error) {
 			caught = error;
 		}
@@ -81,10 +63,10 @@ describe("openai-completions document serialization", () => {
 	});
 
 	it("throws AttachmentSerializationError for tool-result document blocks", () => {
-		const model = makeDocSupportingModel();
+		const model = makeDocSupportingResponsesModel();
 		const assistantMsg: AssistantMessage = {
 			role: "assistant",
-			content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "doc.pdf" } }],
+			content: [{ type: "toolCall", id: "tool-1|fc_a", name: "read", arguments: { path: "doc.pdf" } }],
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
@@ -94,7 +76,7 @@ describe("openai-completions document serialization", () => {
 		};
 		const toolResult: ToolResultMessage = {
 			role: "toolResult",
-			toolCallId: "tool-1",
+			toolCallId: "tool-1|fc_a",
 			toolName: "read",
 			content: [
 				{ type: "text", text: "see attached" },
@@ -109,7 +91,7 @@ describe("openai-completions document serialization", () => {
 
 		let caught: unknown;
 		try {
-			convertMessages(model, context, compat);
+			convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
 		} catch (error) {
 			caught = error;
 		}
@@ -120,7 +102,7 @@ describe("openai-completions document serialization", () => {
 	});
 
 	it("defangs prompt-injection attempts in file name and MIME type within the error message", () => {
-		const model = makeDocSupportingModel();
+		const model = makeDocSupportingResponsesModel();
 		const context: Context = {
 			messages: [
 				{
@@ -140,7 +122,7 @@ describe("openai-completions document serialization", () => {
 
 		let caught: unknown;
 		try {
-			convertMessages(model, context, compat);
+			convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
 		} catch (error) {
 			caught = error;
 		}
@@ -153,10 +135,10 @@ describe("openai-completions document serialization", () => {
 
 	it("downgrades document blocks to text placeholders when model.input excludes documents", () => {
 		const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
-		const model: Model<"openai-completions"> = {
+		const model: Model<"openai-responses"> = {
 			...base,
-			api: "openai-completions",
-			input: ["text", "image"], // no document support — should downgrade, not throw
+			api: "openai-responses",
+			input: ["text", "image"],
 		};
 
 		const context: Context = {
@@ -172,28 +154,20 @@ describe("openai-completions document serialization", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, compat);
-		expect(messages).toHaveLength(1);
-		const userContent = messages[0].content as Array<{ type: string; text?: string }>;
-		expect(Array.isArray(userContent)).toBe(true);
-		const documentText = userContent.find((c) => c.text?.includes("report.pdf"));
+		const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
+		const userMsg = messages.find((m) => "role" in m && m.role === "user") as {
+			content: Array<{ type: string; text?: string }>;
+		};
+		expect(userMsg).toBeDefined();
+		const documentText = userMsg.content.find((c) => c.text?.includes("report.pdf"));
 		expect(documentText).toBeDefined();
-		expect(documentText?.type).toBe("text");
+		expect(documentText?.type).toBe("input_text");
 	});
 });
 
-describe("openai-completions image MIME sanitization", () => {
-	function makeImageOnlyModel(): Model<"openai-completions"> {
-		const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
-		return {
-			...base,
-			api: "openai-completions",
-			input: ["text", "image"],
-		};
-	}
-
+describe("openai-responses-shared image MIME sanitization", () => {
 	it("defangs malicious mimeType in user-message image data URI", () => {
-		const model = makeImageOnlyModel();
+		const model = makeImageOnlyResponsesModel();
 		const context: Context = {
 			messages: [
 				{
@@ -204,14 +178,16 @@ describe("openai-completions image MIME sanitization", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, compat);
-		const userContent = messages[0].content as Array<{ type: string; image_url?: { url: string } }>;
-		const imagePart = userContent.find((c) => c.type === "image_url");
-		expect(imagePart?.image_url?.url).toBe("data:application/octet-stream;base64,iVBORw0KGgo=");
+		const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
+		const userMsg = messages.find((m) => "role" in m && m.role === "user") as {
+			content: Array<{ type: string; image_url?: string }>;
+		};
+		const imagePart = userMsg.content.find((c) => c.type === "input_image");
+		expect(imagePart?.image_url).toBe("data:application/octet-stream;base64,iVBORw0KGgo=");
 	});
 
 	it("preserves valid mimeType in user-message image data URI", () => {
-		const model = makeImageOnlyModel();
+		const model = makeImageOnlyResponsesModel();
 		const context: Context = {
 			messages: [
 				{
@@ -222,17 +198,19 @@ describe("openai-completions image MIME sanitization", () => {
 			],
 		};
 
-		const messages = convertMessages(model, context, compat);
-		const userContent = messages[0].content as Array<{ type: string; image_url?: { url: string } }>;
-		const imagePart = userContent.find((c) => c.type === "image_url");
-		expect(imagePart?.image_url?.url).toBe("data:image/png;base64,iVBORw0KGgo=");
+		const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
+		const userMsg = messages.find((m) => "role" in m && m.role === "user") as {
+			content: Array<{ type: string; image_url?: string }>;
+		};
+		const imagePart = userMsg.content.find((c) => c.type === "input_image");
+		expect(imagePart?.image_url).toBe("data:image/png;base64,iVBORw0KGgo=");
 	});
 
 	it("defangs malicious mimeType in tool-result image data URI", () => {
-		const model = makeImageOnlyModel();
+		const model = makeImageOnlyResponsesModel();
 		const assistantMsg: AssistantMessage = {
 			role: "assistant",
-			content: [{ type: "toolCall", id: "tool-1", name: "screenshot", arguments: {} }],
+			content: [{ type: "toolCall", id: "tool-1|fc_a", name: "screenshot", arguments: {} }],
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
@@ -242,7 +220,7 @@ describe("openai-completions image MIME sanitization", () => {
 		};
 		const toolResult: ToolResultMessage = {
 			role: "toolResult",
-			toolCallId: "tool-1",
+			toolCallId: "tool-1|fc_a",
 			toolName: "screenshot",
 			content: [{ type: "image", mimeType: "image/png\r\nX-Foo: bar", data: "iVBORw0KGgo=" }],
 			isError: false,
@@ -252,15 +230,12 @@ describe("openai-completions image MIME sanitization", () => {
 			messages: [{ role: "user", content: "snap", timestamp: 1 }, assistantMsg, toolResult],
 		};
 
-		const messages = convertMessages(model, context, compat);
-		const userImageMsg = messages.find(
-			(m) =>
-				m.role === "user" &&
-				Array.isArray(m.content) &&
-				m.content.some((c) => (c as { type?: string }).type === "image_url"),
-		) as { content: Array<{ type: string; image_url?: { url: string } }> } | undefined;
-		expect(userImageMsg).toBeDefined();
-		const imagePart = userImageMsg?.content.find((c) => c.type === "image_url");
-		expect(imagePart?.image_url?.url).toBe("data:application/octet-stream;base64,iVBORw0KGgo=");
+		const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
+		const fco = messages.find((m) => "type" in m && m.type === "function_call_output") as {
+			output: Array<{ type: string; image_url?: string }>;
+		};
+		expect(Array.isArray(fco.output)).toBe(true);
+		const imagePart = fco.output.find((c) => c.type === "input_image");
+		expect(imagePart?.image_url).toBe("data:application/octet-stream;base64,iVBORw0KGgo=");
 	});
 });
