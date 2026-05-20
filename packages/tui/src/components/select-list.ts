@@ -64,6 +64,10 @@ export class SelectList implements Component {
 	}
 
 	setSelectedIndex(index: number): void {
+		if (this.filteredItems.length === 0) {
+			this.selectedIndex = 0;
+			return;
+		}
 		this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
 	}
 
@@ -76,7 +80,7 @@ export class SelectList implements Component {
 
 		// If no items match filter, show message
 		if (this.filteredItems.length === 0) {
-			lines.push(this.theme.noMatch("  No matching commands"));
+			lines.push(truncateToWidth(this.theme.noMatch("  No matching commands"), width, ""));
 			return lines;
 		}
 
@@ -113,11 +117,13 @@ export class SelectList implements Component {
 		const kb = getKeybindings();
 		// Up arrow - wrap to bottom when at top
 		if (kb.matches(keyData, "tui.select.up")) {
+			if (this.filteredItems.length === 0) return;
 			this.selectedIndex = this.selectedIndex === 0 ? this.filteredItems.length - 1 : this.selectedIndex - 1;
 			this.notifySelectionChange();
 		}
 		// Down arrow - wrap to top when at bottom
 		else if (kb.matches(keyData, "tui.select.down")) {
+			if (this.filteredItems.length === 0) return;
 			this.selectedIndex = this.selectedIndex === this.filteredItems.length - 1 ? 0 : this.selectedIndex + 1;
 			this.notifySelectionChange();
 		}
@@ -158,21 +164,25 @@ export class SelectList implements Component {
 			if (remainingWidth > MIN_DESCRIPTION_WIDTH) {
 				const truncatedDesc = truncateToWidth(descriptionSingleLine, remainingWidth, "");
 				if (isSelected) {
-					return this.theme.selectedText(`${prefix}${truncatedValue}${spacing}${truncatedDesc}`);
+					return truncateToWidth(
+						this.theme.selectedText(`${prefix}${truncatedValue}${spacing}${truncatedDesc}`),
+						width,
+						"",
+					);
 				}
 
 				const descText = this.theme.description(spacing + truncatedDesc);
-				return prefix + truncatedValue + descText;
+				return truncateToWidth(prefix + truncatedValue + descText, width, "");
 			}
 		}
 
-		const maxWidth = width - prefixWidth - 2;
+		const maxWidth = Math.max(0, width - prefixWidth - 2);
 		const truncatedValue = this.truncatePrimary(item, isSelected, maxWidth, maxWidth);
 		if (isSelected) {
-			return this.theme.selectedText(`${prefix}${truncatedValue}`);
+			return truncateToWidth(this.theme.selectedText(`${prefix}${truncatedValue}`), width, "");
 		}
 
-		return prefix + truncatedValue;
+		return truncateToWidth(prefix + truncatedValue, width, "");
 	}
 
 	private getPrimaryColumnWidth(): number {

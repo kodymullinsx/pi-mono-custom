@@ -120,6 +120,9 @@ function buildCompletionValue(
 	return `${openQuote}${path}${closeQuote}`;
 }
 
+type DirectoryWalkEntry = { path: string; isDirectory: boolean };
+type DirectoryWalkResult = { ok: true; entries: DirectoryWalkEntry[] } | { ok: false; entries: [] };
+
 // Use fd to walk directory tree (fast, respects .gitignore)
 async function walkDirectoryWithFd(
 	baseDir: string,
@@ -127,7 +130,7 @@ async function walkDirectoryWithFd(
 	query: string,
 	maxResults: number,
 	signal: AbortSignal,
-): Promise<Array<{ path: string; isDirectory: boolean }>> {
+): Promise<DirectoryWalkResult> {
 	const args = [
 		"--base-directory",
 		baseDir,
@@ -157,7 +160,7 @@ async function walkDirectoryWithFd(
 
 	return await new Promise((resolve) => {
 		if (signal.aborted) {
-			resolve([]);
+			resolve({ ok: true, entries: [] });
 			return;
 		}
 
@@ -167,11 +170,11 @@ async function walkDirectoryWithFd(
 		let stdout = "";
 		let resolved = false;
 
-		const finish = (results: Array<{ path: string; isDirectory: boolean }>) => {
+		const finish = (result: DirectoryWalkResult) => {
 			if (resolved) return;
 			resolved = true;
 			signal.removeEventListener("abort", onAbort);
-			resolve(results);
+			resolve(result);
 		};
 
 		const onAbort = () => {
@@ -186,16 +189,24 @@ async function walkDirectoryWithFd(
 			stdout += chunk;
 		});
 		child.on("error", () => {
-			finish([]);
+			finish({ ok: false, entries: [] });
 		});
 		child.on("close", (code) => {
-			if (signal.aborted || code !== 0 || !stdout) {
-				finish([]);
+			if (signal.aborted) {
+				finish({ ok: true, entries: [] });
+				return;
+			}
+			if (code !== 0) {
+				finish({ ok: false, entries: [] });
+				return;
+			}
+			if (!stdout) {
+				finish({ ok: true, entries: [] });
 				return;
 			}
 
 			const lines = stdout.trim().split("\n").filter(Boolean);
-			const results: Array<{ path: string; isDirectory: boolean }> = [];
+			const entries: DirectoryWalkEntry[] = [];
 
 			for (const line of lines) {
 				const displayLine = toDisplayPath(line);
@@ -205,13 +216,13 @@ async function walkDirectoryWithFd(
 					continue;
 				}
 
-				results.push({
+				entries.push({
 					path: displayLine,
 					isDirectory: hasTrailingSeparator,
 				});
 			}
 
-			finish(results);
+			finish({ ok: true, entries });
 		});
 	});
 }
@@ -726,12 +737,16 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			const scopedQuery = this.resolveScopedFuzzyQuery(query);
 			const fdBaseDir = scopedQuery?.baseDir ?? this.basePath;
 			const fdQuery = scopedQuery?.query ?? query;
-			const entries = await walkDirectoryWithFd(fdBaseDir, this.fdPath, fdQuery, 100, options.signal);
+			const walkResult = await walkDirectoryWithFd(fdBaseDir, this.fdPath, fdQuery, 100, options.signal);
 			if (options.signal.aborted) {
 				return [];
 			}
+			if (!walkResult.ok) {
+				const fallbackPrefix = options.isQuotedPrefix ? `@"${query}` : `@${query}`;
+				return this.getFileSuggestions(fallbackPrefix);
+			}
 
-			const scoredEntries = entries
+			const scoredEntries = walkResult.entries
 				.map((entry) => ({
 					...entry,
 					score: fdQuery ? this.scoreEntry(entry.path, fdQuery, entry.isDirectory) : 1,

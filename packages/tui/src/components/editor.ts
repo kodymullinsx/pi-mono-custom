@@ -2150,8 +2150,8 @@ export class Editor implements Component, Focusable {
 		startToken: number,
 		options: { force: boolean; explicitTab: boolean },
 	): Promise<void> {
-		const previousTask = this.autocompleteRequestTask;
-		this.autocompleteRequestTask = (async () => {
+		const previousTask = this.autocompleteRequestTask.catch(() => {});
+		const task = (async () => {
 			await previousTask;
 			if (startToken !== this.autocompleteStartToken || !this.autocompleteProvider) {
 				return;
@@ -2164,8 +2164,21 @@ export class Editor implements Component, Focusable {
 			const snapshotLine = this.state.cursorLine;
 			const snapshotCol = this.state.cursorCol;
 
-			await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			try {
+				await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			} catch (error) {
+				if (!controller.signal.aborted && requestId === this.autocompleteRequestId) {
+					this.clearAutocompleteUi();
+					this.tui.requestRender();
+					this.tui.reportError(error);
+				}
+			} finally {
+				if (this.autocompleteAbort === controller) {
+					this.autocompleteAbort = undefined;
+				}
+			}
 		})();
+		this.autocompleteRequestTask = task.catch(() => {});
 		await this.autocompleteRequestTask;
 	}
 

@@ -113,4 +113,62 @@ describe("SelectList", () => {
 		assert.ok(rendered[0].includes("…"));
 		assert.equal(visibleIndexOf(rendered[0], "first"), visibleIndexOf(rendered[1], "second"));
 	});
+
+	it("keeps selection stable when filtering removes all items", () => {
+		const list = new SelectList([{ value: "alpha", label: "alpha" }], 5, testTheme);
+
+		list.setFilter("zzz");
+		list.setSelectedIndex(4);
+		list.handleInput("\x1b[B"); // Down
+		list.handleInput("\x1b[A"); // Up
+		list.handleInput("\r"); // Enter
+
+		assert.strictEqual(list.getSelectedItem(), null);
+		assert.deepStrictEqual(list.render(80), ["  No matching commands"]);
+	});
+
+	it("clamps no-match output to narrow widths", () => {
+		const list = new SelectList([{ value: "alpha", label: "alpha" }], 5, testTheme);
+
+		list.setFilter("zzz");
+		const [line] = list.render(1);
+
+		assert.ok(line);
+		assert.ok(visibleWidth(line) <= 1);
+	});
+
+	it("clamps item rows to narrow widths", () => {
+		const list = new SelectList(
+			[
+				{ value: "alpha", label: "alpha" },
+				{ value: "beta", label: "beta" },
+			],
+			5,
+			testTheme,
+		);
+
+		list.setSelectedIndex(1);
+		const rendered = list.render(1);
+
+		assert.ok(rendered.length > 0);
+		for (const line of rendered) {
+			assert.ok(visibleWidth(line) <= 1);
+		}
+	});
+
+	it("does not pass negative widths to custom primary truncation", () => {
+		const seenWidths: Array<{ maxWidth: number; columnWidth: number }> = [];
+		const list = new SelectList([{ value: "alpha", label: "alpha" }], 5, testTheme, {
+			truncatePrimary: ({ maxWidth, columnWidth }) => {
+				seenWidths.push({ maxWidth, columnWidth });
+				assert.ok(maxWidth >= 0);
+				assert.ok(columnWidth >= 0);
+				return "";
+			},
+		});
+
+		list.render(1);
+
+		assert.deepStrictEqual(seenWidths, [{ maxWidth: 0, columnWidth: 0 }]);
+	});
 });

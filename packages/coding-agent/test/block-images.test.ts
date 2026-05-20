@@ -116,5 +116,15 @@ describe("blockImages setting", () => {
 			expect(result.attachments).toHaveLength(0);
 			expect(result.text).toContain("Hello, world!");
 		});
+
+		it("should keep empty files visible in the prompt context", async () => {
+			const emptyPath = join(testDir, "empty.txt");
+			writeFileSync(emptyPath, "");
+
+			const result = await processFileArguments([emptyPath]);
+
+			expect(result.attachments).toHaveLength(0);
+			expect(result.text).toContain(`<file name="${emptyPath}">[File is empty.]</file>`);
+		});
 	});
 });

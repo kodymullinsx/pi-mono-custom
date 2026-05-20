@@ -1,3 +1,5 @@
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { describe, expect, it } from "vitest";
@@ -180,6 +182,23 @@ describe("skills", () => {
 
 			expect(skills).toHaveLength(0);
 			expect(diagnostics).toHaveLength(0);
+		});
+
+		it("should report unreadable ignore files instead of silently skipping them", () => {
+			const tempDir = join(tmpdir(), `skills-ignore-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+			mkdirSync(join(tempDir, ".gitignore"), { recursive: true });
+			try {
+				const { diagnostics } = loadSkillsFromDir({
+					dir: tempDir,
+					source: "test",
+				});
+
+				expect(diagnostics.some((diagnostic) => diagnostic.message.includes("Unable to read ignore file"))).toBe(
+					true,
+				);
+			} finally {
+				rmSync(tempDir, { recursive: true, force: true });
+			}
 		});
 
 		it("should use parent directory name when name not in frontmatter", () => {

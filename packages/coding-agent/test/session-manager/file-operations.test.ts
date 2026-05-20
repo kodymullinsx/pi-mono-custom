@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findMostRecentSession, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.js";
 
@@ -161,10 +161,9 @@ describe("SessionManager.setSessionFile with corrupted files", () => {
 	it("truncates and rewrites file without valid header", () => {
 		const noHeaderFile = join(tempDir, "no-header.jsonl");
 		// File with messages but no session header (corrupted state)
-		writeFileSync(
-			noHeaderFile,
-			'{"type":"message","id":"abc","parentId":"orphaned","timestamp":"2025-01-01T00:00:00Z","message":{"role":"assistant","content":"test"}}\n',
-		);
+		const corruptedContent =
+			'{"type":"message","id":"abc","parentId":"orphaned","timestamp":"2025-01-01T00:00:00Z","message":{"role":"assistant","content":"test"}}\n';
+		writeFileSync(noHeaderFile, corruptedContent);
 
 		const sm = SessionManager.open(noHeaderFile, tempDir);
 
@@ -180,6 +179,33 @@ describe("SessionManager.setSessionFile with corrupted files", () => {
 		const header = JSON.parse(lines[0]);
 		expect(header.type).toBe("session");
 		expect(header.id).toBe(sm.getSessionId());
+
+		const backups = readdirSync(tempDir).filter((file) => file.startsWith(`${basename(noHeaderFile)}.corrupt.`));
+		expect(backups).toHaveLength(1);
+		expect(readFileSync(join(tempDir, backups[0]), "utf-8")).toBe(corruptedContent);
+		expect(sm.getRecoveryDiagnostics()[0]).toContain("missing valid session header");
+	});
+
+	it("preserves a backup and diagnostic when malformed lines are skipped from a valid session", () => {
+		const mixedFile = join(tempDir, "mixed.jsonl");
+		const mixedContent =
+			'{"type":"session","id":"abc","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp"}\n' +
+			"not valid json\n" +
+			'{"type":"message","id":"1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hi","timestamp":1}}\n';
+		writeFileSync(mixedFile, mixedContent);
+
+		const sm = SessionManager.open(mixedFile, tempDir);
+
+		expect(sm.getEntries()).toHaveLength(1);
+		const backups = readdirSync(tempDir).filter((file) => file.startsWith(`${basename(mixedFile)}.corrupt.`));
+		expect(backups).toHaveLength(1);
+		expect(readFileSync(join(tempDir, backups[0]), "utf-8")).toBe(mixedContent);
+		expect(sm.getRecoveryDiagnostics()[0]).toContain("malformed JSONL line");
+
+		const reopened = SessionManager.open(mixedFile, tempDir);
+		expect(reopened.getEntries()).toHaveLength(1);
+		expect(reopened.getRecoveryDiagnostics()).toEqual([]);
+		expect(readdirSync(tempDir).filter((file) => file.startsWith(`${basename(mixedFile)}.corrupt.`))).toHaveLength(1);
 	});
 
 	it("preserves explicit session file path when recovering from corrupted file", () => {

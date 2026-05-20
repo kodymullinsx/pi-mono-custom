@@ -91,6 +91,25 @@ export const CURSOR_MARKER = "\x1b_pi:c\x07";
 
 export { visibleWidth };
 
+type ErrorWithCleanupFailures = Error & {
+	cleanupFailures?: Array<{ operation: string; error: unknown }>;
+};
+
+function attachCleanupFailure(primary: unknown, operation: string, failure: unknown): unknown {
+	if (primary instanceof Error) {
+		const error = primary as ErrorWithCleanupFailures;
+		error.cleanupFailures = [...(error.cleanupFailures ?? []), { operation, error: failure }];
+		return error;
+	}
+
+	const error = new Error(`TUI operation failed; ${operation} cleanup also failed`) as ErrorWithCleanupFailures & {
+		primaryError: unknown;
+	};
+	error.primaryError = primary;
+	error.cleanupFailures = [{ operation, error: failure }];
+	return error;
+}
+
 /**
  * Anchor position for overlays
  */
@@ -247,6 +266,8 @@ export class TUI extends Container {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
+	/** Called when TUI work fails after cleanup has been attempted. If unset, render errors are rethrown. */
+	public onError?: (error: unknown) => void;
 	private renderRequested = false;
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
@@ -280,6 +301,16 @@ export class TUI extends Container {
 
 	get fullRedraws(): number {
 		return this.fullRedrawCount;
+	}
+
+	reportError(error: unknown): void {
+		if (this.onError) {
+			this.onError(error);
+			return;
+		}
+		queueMicrotask(() => {
+			throw error;
+		});
 	}
 
 	getShowHardwareCursor(): boolean {
@@ -472,24 +503,39 @@ export class TUI extends Container {
 
 	stop(): void {
 		this.stopped = true;
+		this.renderRequested = false;
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
 			this.renderTimer = undefined;
 		}
-		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
-		if (this.previousLines.length > 0) {
-			const targetRow = this.previousLines.length; // Line after the last content
-			const lineDiff = targetRow - this.hardwareCursorRow;
-			if (lineDiff > 0) {
-				this.terminal.write(`\x1b[${lineDiff}B`);
-			} else if (lineDiff < 0) {
-				this.terminal.write(`\x1b[${-lineDiff}A`);
+		let shutdownError: unknown;
+		try {
+			// Move cursor to the end of the content to prevent overwriting/artifacts on exit
+			if (this.previousLines.length > 0) {
+				const targetRow = this.previousLines.length; // Line after the last content
+				const lineDiff = targetRow - this.hardwareCursorRow;
+				if (lineDiff > 0) {
+					this.terminal.write(`\x1b[${lineDiff}B`);
+				} else if (lineDiff < 0) {
+					this.terminal.write(`\x1b[${-lineDiff}A`);
+				}
+				this.terminal.write("\r\n");
 			}
-			this.terminal.write("\r\n");
+
+			this.terminal.showCursor();
+		} catch (error) {
+			shutdownError = error;
+		} finally {
+			try {
+				this.terminal.stop();
+			} catch (error) {
+				shutdownError = shutdownError ? attachCleanupFailure(shutdownError, "terminal.stop", error) : error;
+			}
 		}
 
-		this.terminal.showCursor();
-		this.terminal.stop();
+		if (shutdownError) {
+			throw shutdownError;
+		}
 	}
 
 	requestRender(force = false): void {
@@ -512,7 +558,7 @@ export class TUI extends Container {
 				}
 				this.renderRequested = false;
 				this.lastRenderAt = performance.now();
-				this.doRender();
+				this.safeDoRender();
 			});
 			return;
 		}
@@ -534,11 +580,49 @@ export class TUI extends Container {
 			}
 			this.renderRequested = false;
 			this.lastRenderAt = performance.now();
-			this.doRender();
-			if (this.renderRequested) {
+			const rendered = this.safeDoRender();
+			if (rendered && this.renderRequested) {
 				this.scheduleRender();
 			}
 		}, delay);
+	}
+
+	private safeDoRender(): boolean {
+		try {
+			this.doRender();
+			return true;
+		} catch (error) {
+			const reportedError = this.cleanupAfterRenderFailure(error);
+			if (this.onError) {
+				this.onError(reportedError);
+				return false;
+			}
+			throw reportedError;
+		}
+	}
+
+	private cleanupAfterRenderFailure(primaryError: unknown): unknown {
+		let reportedError = primaryError;
+		this.renderRequested = false;
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = undefined;
+		}
+		if (this.stopped) {
+			return reportedError;
+		}
+		this.stopped = true;
+		try {
+			this.terminal.showCursor();
+		} catch (error) {
+			reportedError = attachCleanupFailure(reportedError, "showCursor", error);
+		}
+		try {
+			this.terminal.stop();
+		} catch (error) {
+			reportedError = attachCleanupFailure(reportedError, "terminal.stop", error);
+		}
+		return reportedError;
 	}
 
 	private handleInput(data: string): void {
@@ -950,6 +1034,58 @@ export class TUI extends Container {
 		return null;
 	}
 
+	private appendDebugFile(filePath: string, data: string): void {
+		try {
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.appendFileSync(filePath, data);
+		} catch {
+			// Debug logging must never become the render failure.
+		}
+	}
+
+	private writeDebugFile(filePath: string, data: string): boolean {
+		try {
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, data);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	private validateRenderedLineWidths(lines: string[], width: number): void {
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (isImageLine(line)) continue;
+			const lineWidth = visibleWidth(line);
+			if (lineWidth <= width) continue;
+
+			const crashLogPath = path.join(os.homedir(), ".pi", "agent", "pi-crash.log");
+			const crashData = [
+				`Crash at ${new Date().toISOString()}`,
+				`Terminal width: ${width}`,
+				`Line ${i} visible width: ${lineWidth}`,
+				"",
+				"=== All rendered lines ===",
+				...lines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
+				"",
+			].join("\n");
+			const wroteCrashLog = this.writeDebugFile(crashLogPath, crashData);
+
+			const errorMsg = [
+				`Rendered line ${i} exceeds terminal width (${lineWidth} > ${width}).`,
+				"",
+				"This is likely caused by a custom TUI component not truncating its output.",
+				"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
+				"",
+				wroteCrashLog
+					? `Debug log written to: ${crashLogPath}`
+					: `Debug log could not be written to: ${crashLogPath}`,
+			].join("\n");
+			throw new Error(errorMsg);
+		}
+	}
+
 	private doRender(): void {
 		if (this.stopped) return;
 		const width = this.terminal.columns;
@@ -978,6 +1114,7 @@ export class TUI extends Container {
 		const cursorPos = this.extractCursorPosition(newLines, height);
 
 		newLines = this.applyLineResets(newLines);
+		this.validateRenderedLineWidths(newLines, width);
 
 		// Helper to clear scrollback and viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
@@ -1015,7 +1152,7 @@ export class TUI extends Container {
 			if (!debugRedraw) return;
 			const logPath = path.join(os.homedir(), ".pi", "agent", "pi-debug.log");
 			const msg = `[${new Date().toISOString()}] fullRender: ${reason} (prev=${this.previousLines.length}, new=${newLines.length}, height=${height})\n`;
-			fs.appendFileSync(logPath, msg);
+			this.appendDebugFile(logPath, msg);
 		};
 
 		// First render - just output everything without clearing (assumes clean screen)
@@ -1176,35 +1313,6 @@ export class TUI extends Container {
 			if (i > firstChanged) buffer += "\r\n";
 			buffer += "\x1b[2K"; // Clear current line
 			const line = newLines[i];
-			const isImage = isImageLine(line);
-			if (!isImage && visibleWidth(line) > width) {
-				// Log all lines to crash file for debugging
-				const crashLogPath = path.join(os.homedir(), ".pi", "agent", "pi-crash.log");
-				const crashData = [
-					`Crash at ${new Date().toISOString()}`,
-					`Terminal width: ${width}`,
-					`Line ${i} visible width: ${visibleWidth(line)}`,
-					"",
-					"=== All rendered lines ===",
-					...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
-					"",
-				].join("\n");
-				fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
-				fs.writeFileSync(crashLogPath, crashData);
-
-				// Clean up terminal state before throwing
-				this.stop();
-
-				const errorMsg = [
-					`Rendered line ${i} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
-					"",
-					"This is likely caused by a custom TUI component not truncating its output.",
-					"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
-					"",
-					`Debug log written to: ${crashLogPath}`,
-				].join("\n");
-				throw new Error(errorMsg);
-			}
 			buffer += line;
 		}
 
@@ -1231,7 +1339,6 @@ export class TUI extends Container {
 
 		if (process.env.PI_TUI_DEBUG === "1") {
 			const debugDir = "/tmp/tui";
-			fs.mkdirSync(debugDir, { recursive: true });
 			const debugPath = path.join(debugDir, `render-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
 			const debugData = [
 				`firstChanged: ${firstChanged}`,
@@ -1255,7 +1362,7 @@ export class TUI extends Container {
 				"=== buffer ===",
 				JSON.stringify(buffer),
 			].join("\n");
-			fs.writeFileSync(debugPath, debugData);
+			this.writeDebugFile(debugPath, debugData);
 		}
 
 		// Write entire buffer at once

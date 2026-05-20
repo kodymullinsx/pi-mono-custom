@@ -226,6 +226,79 @@ describe("AgentSession compaction characterization", () => {
 		expect(continueSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("emits compaction failure when queued-message continuation rejects after compaction", async () => {
+		vi.useFakeTimers();
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "auto compacted",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		harness.session.agent.followUp({
+			role: "custom",
+			customType: "test",
+			content: [{ type: "text", text: "queued custom" }],
+			display: false,
+			timestamp: Date.now(),
+		});
+		vi.spyOn(harness.session.agent, "continue").mockRejectedValue(new Error("continue exploded"));
+		const compactionErrors: string[] = [];
+		harness.session.subscribe((event) => {
+			if (event.type === "compaction_end" && event.errorMessage) {
+				compactionErrors.push(event.errorMessage);
+			}
+		});
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await sessionInternals._runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(compactionErrors).toContain("Auto-compaction follow-up failed: continue exploded");
+	});
+
+	it("emits compaction failure when overflow retry continuation rejects after compaction", async () => {
+		vi.useFakeTimers();
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "overflow compacted",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		vi.spyOn(harness.session.agent, "continue").mockRejectedValue(new Error("continue exploded"));
+		const compactionErrors: string[] = [];
+		harness.session.subscribe((event) => {
+			if (event.type === "compaction_end" && event.errorMessage) {
+				compactionErrors.push(event.errorMessage);
+			}
+		});
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await sessionInternals._runAutoCompaction("overflow", true);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(compactionErrors).toContain("Context overflow recovery failed after compaction: continue exploded");
+	});
+
 	it("does not retry overflow recovery more than once", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);

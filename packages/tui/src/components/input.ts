@@ -3,7 +3,14 @@ import { decodeKittyPrintable } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui.js";
 import { UndoStack } from "../undo-stack.js";
-import { getSegmenter, isPunctuationChar, isWhitespaceChar, sliceByColumn, visibleWidth } from "../utils.js";
+import {
+	getSegmenter,
+	isPunctuationChar,
+	isWhitespaceChar,
+	sliceByColumn,
+	truncateToWidth,
+	visibleWidth,
+} from "../utils.js";
 
 const segmenter = getSegmenter();
 
@@ -42,6 +49,9 @@ export class Input implements Component, Focusable {
 	setValue(value: string): void {
 		this.value = value;
 		this.cursor = Math.min(this.cursor, value.length);
+		this.lastAction = null;
+		this.isInPaste = false;
+		this.pasteBuffer = "";
 	}
 
 	handleInput(data: string): void {
@@ -437,7 +447,7 @@ export class Input implements Component, Focusable {
 		const availableWidth = width - prompt.length;
 
 		if (availableWidth <= 0) {
-			return [prompt];
+			return [truncateToWidth(prompt, width, "")];
 		}
 
 		let visibleText = "";

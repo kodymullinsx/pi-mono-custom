@@ -13,6 +13,14 @@ class TestComponent implements Component {
 	invalidate(): void {}
 }
 
+class ThrowingComponent implements Component {
+	constructor(private error: Error) {}
+	render(): string[] {
+		throw this.error;
+	}
+	invalidate(): void {}
+}
+
 class LoggingVirtualTerminal extends VirtualTerminal {
 	private writes: string[] = [];
 
@@ -27,6 +35,45 @@ class LoggingVirtualTerminal extends VirtualTerminal {
 
 	clearWrites(): void {
 		this.writes = [];
+	}
+}
+
+class TrackingVirtualTerminal extends LoggingVirtualTerminal {
+	stopCount = 0;
+	showCursorCount = 0;
+
+	override stop(): void {
+		this.stopCount += 1;
+		super.stop();
+	}
+
+	override showCursor(): void {
+		this.showCursorCount += 1;
+		super.showCursor();
+	}
+}
+
+class FailingShowCursorTerminal extends TrackingVirtualTerminal {
+	readonly showCursorError = new Error("show cursor failed");
+
+	override showCursor(): void {
+		this.showCursorCount += 1;
+		throw this.showCursorError;
+	}
+}
+
+class FailingCleanupTerminal extends TrackingVirtualTerminal {
+	readonly showCursorError = new Error("show cursor failed");
+	readonly stopError = new Error("stop failed");
+
+	override showCursor(): void {
+		this.showCursorCount += 1;
+		throw this.showCursorError;
+	}
+
+	override stop(): void {
+		this.stopCount += 1;
+		throw this.stopError;
 	}
 }
 
@@ -142,6 +189,102 @@ describe("TUI Kitty image cleanup", () => {
 		assert.ok(deleteIndex < clearIndex, "old image should be deleted before the screen is cleared");
 
 		tui.stop();
+	});
+});
+
+describe("TUI render failure cleanup", () => {
+	type ErrorWithCleanupFailures = Error & {
+		cleanupFailures?: Array<{ operation: string; error: unknown }>;
+	};
+
+	it("stops the terminal and shows the cursor when component render throws", async () => {
+		const terminal = new TrackingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const expectedError = new Error("render exploded");
+		let observedError: unknown;
+		tui.onError = (error) => {
+			observedError = error;
+		};
+		tui.addChild(new ThrowingComponent(expectedError));
+
+		tui.start();
+		await new Promise((resolve) => setTimeout(resolve, 25));
+
+		assert.strictEqual(observedError, expectedError);
+		assert.equal(terminal.showCursorCount, 1);
+		assert.equal(terminal.stopCount, 1);
+	});
+
+	it("attaches cleanup failures to render errors", async () => {
+		const terminal = new FailingCleanupTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const expectedError = new Error("render exploded");
+		let observedError: ErrorWithCleanupFailures | undefined;
+		tui.onError = (error) => {
+			observedError = error as ErrorWithCleanupFailures;
+		};
+		tui.addChild(new ThrowingComponent(expectedError));
+
+		tui.start();
+		await new Promise((resolve) => setTimeout(resolve, 25));
+
+		assert.strictEqual(observedError, expectedError);
+		assert.deepStrictEqual(
+			observedError?.cleanupFailures?.map((failure) => failure.operation),
+			["showCursor", "terminal.stop"],
+		);
+		assert.equal(terminal.showCursorCount, 1);
+		assert.equal(terminal.stopCount, 1);
+	});
+
+	it("still stops the terminal when shutdown cursor restoration fails", () => {
+		const terminal = new FailingShowCursorTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		assert.throws(() => tui.stop(), /show cursor failed/);
+		assert.equal(terminal.stopCount, 1);
+	});
+
+	it("validates line width on first render before writing over-wide content", async () => {
+		const terminal = new TrackingVirtualTerminal(5, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["this line is too wide"];
+		let observedError: Error | undefined;
+		tui.onError = (error) => {
+			observedError = error as Error;
+		};
+		tui.addChild(component);
+
+		tui.start();
+		await new Promise((resolve) => setTimeout(resolve, 25));
+
+		assert.match(observedError?.message ?? "", /exceeds terminal width/);
+		assert.equal(terminal.stopCount, 1);
+		assert.equal(terminal.getWrites().includes("this line is too wide"), false);
+	});
+
+	it("validates line width on forced full redraws", async () => {
+		const terminal = new TrackingVirtualTerminal(10, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["ok"];
+		let observedError: Error | undefined;
+		tui.onError = (error) => {
+			observedError = error as Error;
+		};
+		tui.addChild(component);
+		tui.start();
+		await terminal.waitForRender();
+		terminal.clearWrites();
+
+		component.lines = ["this line is too wide"];
+		tui.requestRender(true);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+
+		assert.match(observedError?.message ?? "", /exceeds terminal width/);
+		assert.equal(terminal.stopCount, 1);
+		assert.equal(terminal.getWrites().includes("this line is too wide"), false);
 	});
 });
 

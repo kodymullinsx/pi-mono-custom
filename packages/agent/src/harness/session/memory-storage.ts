@@ -5,37 +5,8 @@ import {
 	type SessionStorage,
 	type SessionTreeEntry,
 } from "../types.js";
+import { buildLabelsById, generateEntryId, leafIdAfterEntry, updateLabelCache } from "./storage-utils.js";
 import { uuidv7 } from "./uuid.js";
-
-function updateLabelCache(labelsById: Map<string, string>, entry: SessionTreeEntry): void {
-	if (entry.type !== "label") return;
-	const label = entry.label?.trim();
-	if (label) {
-		labelsById.set(entry.targetId, label);
-	} else {
-		labelsById.delete(entry.targetId);
-	}
-}
-
-function buildLabelsById(entries: SessionTreeEntry[]): Map<string, string> {
-	const labelsById = new Map<string, string>();
-	for (const entry of entries) {
-		updateLabelCache(labelsById, entry);
-	}
-	return labelsById;
-}
-
-function generateEntryId(byId: { has(id: string): boolean }): string {
-	for (let i = 0; i < 100; i++) {
-		const id = uuidv7().slice(0, 8);
-		if (!byId.has(id)) return id;
-	}
-	return uuidv7();
-}
-
-function leafIdAfterEntry(entry: SessionTreeEntry): string | null {
-	return entry.type === "leaf" ? entry.targetId : entry.id;
-}
 
 export class InMemorySessionStorage<TMetadata extends SessionMetadata = SessionMetadata>
 	implements SessionStorage<TMetadata>
@@ -90,6 +61,9 @@ export class InMemorySessionStorage<TMetadata extends SessionMetadata = SessionM
 	}
 
 	async appendEntry(entry: SessionTreeEntry): Promise<void> {
+		if (this.byId.has(entry.id)) {
+			throw new SessionError("invalid_entry", `Entry ${entry.id} already exists`);
+		}
 		this.entries.push(entry);
 		this.byId.set(entry.id, entry);
 		updateLabelCache(this.labelsById, entry);

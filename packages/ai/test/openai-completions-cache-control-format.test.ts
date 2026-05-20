@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
 import { streamOpenAICompletions } from "../src/providers/openai-completions.js";
-import type { Model } from "../src/types.js";
+import type { Context, Model } from "../src/types.js";
 
 interface CacheControl {
 	type: "ephemeral";
@@ -24,6 +24,8 @@ interface CapturedParams {
 	messages: Array<{
 		role: string;
 		content: string | TextPart[] | null;
+		tool_call_id?: string;
+		tool_calls?: unknown[];
 	}>;
 	tools?: ToolWithCacheControl[];
 }
@@ -74,12 +76,13 @@ vi.mock("openai", () => {
 async function capturePayload(
 	model: Model<"openai-completions">,
 	options?: { cacheRetention?: "none" | "short" | "long" },
+	contextOverride?: Context,
 ): Promise<CapturedParams> {
 	const timestamp = Date.now();
 
 	await streamOpenAICompletions(
 		model,
-		{
+		contextOverride ?? {
 			systemPrompt: "System prompt",
 			messages: [{ role: "user", content: "Hello", timestamp }],
 			tools: [
@@ -185,5 +188,72 @@ describe("openai-completions cacheControlFormat", () => {
 		expect(Array.isArray(instructionMessage?.content)).toBe(false);
 		expect(params.tools?.[0]?.cache_control).toBeUndefined();
 		expect(typeof params.messages[params.messages.length - 1]?.content).toBe("string");
+	});
+
+	it("applies Anthropic-style cache markers to the last tool result message", async () => {
+		const model: Model<"openai-completions"> = {
+			id: "custom-qwen",
+			name: "Custom Qwen",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://example.com/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 128000,
+			maxTokens: 32000,
+			compat: {
+				cacheControlFormat: "anthropic",
+			},
+		};
+		const timestamp = Date.now();
+		const params = await capturePayload(model, undefined, {
+			systemPrompt: "System prompt",
+			messages: [
+				{ role: "user", content: "Read it", timestamp },
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { path: "a.txt" } }],
+					api: "openai-completions",
+					provider: "openrouter",
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call_1",
+					toolName: "read",
+					content: [{ type: "text", text: "file contents" }],
+					isError: false,
+					timestamp,
+				},
+			],
+			tools: [
+				{
+					name: "read",
+					description: "Read a file",
+					parameters: Type.Object({ path: Type.String() }),
+				},
+			],
+		});
+
+		const lastMessage = params.messages[params.messages.length - 1];
+		expect(lastMessage.role).toBe("tool");
+		expect(Array.isArray(lastMessage.content)).toBe(true);
+		expect((lastMessage.content as TextPart[])[0]?.cache_control).toEqual({ type: "ephemeral" });
 	});
 });

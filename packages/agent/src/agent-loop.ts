@@ -37,20 +37,38 @@ export function agentLoop(
 ): EventStream<AgentEvent, AgentMessage[]> {
 	const stream = createAgentStream();
 
-	void runAgentLoop(
-		prompts,
-		context,
-		config,
-		async (event) => {
-			stream.push(event);
-		},
-		signal,
-		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	finishAgentLoop(
+		stream,
+		runAgentLoop(
+			prompts,
+			context,
+			config,
+			async (event) => {
+				stream.push(event);
+			},
+			signal,
+			streamFn,
+		),
+	);
 
 	return stream;
+}
+
+function finishAgentLoop(stream: EventStream<AgentEvent, AgentMessage[]>, runner: Promise<AgentMessage[]>): void {
+	void runner.then(
+		(messages) => {
+			stream.end(messages);
+		},
+		(error) => {
+			failAgentStream(stream, error);
+		},
+	);
+}
+
+function failAgentStream(stream: EventStream<AgentEvent, AgentMessage[]>, error: unknown): void {
+	const rejectedResult = Promise.reject(error);
+	rejectedResult.catch(() => {});
+	stream.end(rejectedResult as unknown as AgentMessage[]);
 }
 
 /**
@@ -77,17 +95,18 @@ export function agentLoopContinue(
 
 	const stream = createAgentStream();
 
-	void runAgentLoopContinue(
-		context,
-		config,
-		async (event) => {
-			stream.push(event);
-		},
-		signal,
-		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	finishAgentLoop(
+		stream,
+		runAgentLoopContinue(
+			context,
+			config,
+			async (event) => {
+				stream.push(event);
+			},
+			signal,
+			streamFn,
+		),
+	);
 
 	return stream;
 }
@@ -578,34 +597,10 @@ async function prepareToolCall(
 		};
 	}
 
+	const preparedToolCall = prepareToolCallArguments(tool, toolCall);
+	let validatedArgs: unknown;
 	try {
-		const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-		const validatedArgs = validateToolArguments(tool, preparedToolCall);
-		if (config.beforeToolCall) {
-			const beforeResult = await config.beforeToolCall(
-				{
-					assistantMessage,
-					toolCall,
-					args: validatedArgs,
-					context: currentContext,
-				},
-				signal,
-			);
-			if (beforeResult?.block) {
-				return {
-					kind: "immediate",
-					result: createErrorToolResult(beforeResult.reason || "Tool execution was blocked"),
-					isError: true,
-				};
-			}
-		}
-		preparedToolCall.arguments = validatedArgs as Record<string, unknown>;
-		return {
-			kind: "prepared",
-			toolCall: preparedToolCall,
-			tool,
-			args: validatedArgs,
-		};
+		validatedArgs = validateToolArguments(tool, preparedToolCall);
 	} catch (error) {
 		return {
 			kind: "immediate",
@@ -613,6 +608,32 @@ async function prepareToolCall(
 			isError: true,
 		};
 	}
+
+	if (config.beforeToolCall) {
+		const beforeResult = await config.beforeToolCall(
+			{
+				assistantMessage,
+				toolCall,
+				args: validatedArgs,
+				context: currentContext,
+			},
+			signal,
+		);
+		if (beforeResult?.block) {
+			return {
+				kind: "immediate",
+				result: createErrorToolResult(beforeResult.reason || "Tool execution was blocked"),
+				isError: true,
+			};
+		}
+	}
+	preparedToolCall.arguments = validatedArgs as Record<string, unknown>;
+	return {
+		kind: "prepared",
+		toolCall: preparedToolCall,
+		tool,
+		args: validatedArgs,
+	};
 }
 
 async function executePreparedToolCall(
@@ -664,30 +685,25 @@ async function finalizeExecutedToolCall(
 	let isError = executed.isError;
 
 	if (config.afterToolCall) {
-		try {
-			const afterResult = await config.afterToolCall(
-				{
-					assistantMessage,
-					toolCall: prepared.toolCall,
-					args: prepared.args,
-					result,
-					isError,
-					context: currentContext,
-				},
-				signal,
-			);
-			if (afterResult) {
-				result = {
-					content: afterResult.content ?? result.content,
-					details: afterResult.details ?? result.details,
-					newMessages: afterResult.newMessages ?? result.newMessages,
-					terminate: afterResult.terminate ?? result.terminate,
-				};
-				isError = afterResult.isError ?? isError;
-			}
-		} catch (error) {
-			result = createErrorToolResult(error instanceof Error ? error.message : String(error));
-			isError = true;
+		const afterResult = await config.afterToolCall(
+			{
+				assistantMessage,
+				toolCall: prepared.toolCall,
+				args: prepared.args,
+				result,
+				isError,
+				context: currentContext,
+			},
+			signal,
+		);
+		if (afterResult) {
+			result = {
+				content: afterResult.content ?? result.content,
+				details: afterResult.details ?? result.details,
+				newMessages: afterResult.newMessages ?? result.newMessages,
+				terminate: afterResult.terminate ?? result.terminate,
+			};
+			isError = afterResult.isError ?? isError;
 		}
 	}
 

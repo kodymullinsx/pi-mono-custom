@@ -62,6 +62,30 @@ function pruneStaleEntries(root: string): Promise<void> {
 	return activeCleanup;
 }
 
+function getPDFPageImageNumber(entry: string): number | undefined {
+	const match = /-(\d+)\.jpg$/i.exec(entry);
+	if (!match) return undefined;
+	const parsed = Number.parseInt(match[1], 10);
+	return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+export function sortPDFPageImageEntries(entries: string[]): string[] {
+	return [...entries].sort((a, b) => {
+		const pageA = getPDFPageImageNumber(a);
+		const pageB = getPDFPageImageNumber(b);
+		if (pageA !== undefined && pageB !== undefined && pageA !== pageB) {
+			return pageA - pageB;
+		}
+		if (pageA !== undefined && pageB === undefined) {
+			return -1;
+		}
+		if (pageA === undefined && pageB !== undefined) {
+			return 1;
+		}
+		return a.localeCompare(b);
+	});
+}
+
 export async function getPDFCacheEntry(
 	filePath: string,
 	mtimeMs: number,
@@ -79,10 +103,9 @@ export async function getPDFCacheEntry(
 	await mkdir(outputDir, { recursive: true });
 
 	const entries = await readdir(outputDir);
-	const imagePaths = entries
-		.filter((entry) => entry.endsWith(".jpg"))
-		.sort()
-		.map((entry) => join(outputDir, entry));
+	const imagePaths = sortPDFPageImageEntries(entries.filter((entry) => entry.endsWith(".jpg"))).map((entry) =>
+		join(outputDir, entry),
+	);
 
 	return { outputDir, imagePaths };
 }

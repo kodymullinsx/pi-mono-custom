@@ -1,7 +1,7 @@
 import type { FileSystem, JsonlSessionMetadata, LeafEntry, SessionStorage, SessionTreeEntry } from "../types.js";
 import { SessionError, toError } from "../types.js";
 import { getFileSystemResultOrThrow } from "./repo-utils.js";
-import { uuidv7 } from "./uuid.js";
+import { buildLabelsById, generateEntryId, leafIdAfterEntry, updateLabelCache } from "./storage-utils.js";
 
 type JsonlSessionStorageFileSystem = Pick<FileSystem, "readTextFile" | "readTextLines" | "writeFile" | "appendFile">;
 
@@ -12,32 +12,6 @@ interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
-}
-
-function updateLabelCache(labelsById: Map<string, string>, entry: SessionTreeEntry): void {
-	if (entry.type !== "label") return;
-	const label = entry.label?.trim();
-	if (label) {
-		labelsById.set(entry.targetId, label);
-	} else {
-		labelsById.delete(entry.targetId);
-	}
-}
-
-function buildLabelsById(entries: SessionTreeEntry[]): Map<string, string> {
-	const labelsById = new Map<string, string>();
-	for (const entry of entries) {
-		updateLabelCache(labelsById, entry);
-	}
-	return labelsById;
-}
-
-function generateEntryId(byId: { has(id: string): boolean }): string {
-	for (let i = 0; i < 100; i++) {
-		const id = uuidv7().slice(0, 8);
-		if (!byId.has(id)) return id;
-	}
-	return uuidv7();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -54,6 +28,90 @@ function invalidEntry(filePath: string, lineNumber: number, message: string, cau
 		`Invalid JSONL session file ${filePath}: line ${lineNumber} ${message}`,
 		cause,
 	);
+}
+
+function expectStringField(entry: Record<string, unknown>, field: string, filePath: string, lineNumber: number): void {
+	if (typeof entry[field] !== "string" || entry[field] === "") {
+		throw invalidEntry(filePath, lineNumber, `is missing ${field}`);
+	}
+}
+
+function expectNumberField(entry: Record<string, unknown>, field: string, filePath: string, lineNumber: number): void {
+	if (typeof entry[field] !== "number" || Number.isNaN(entry[field])) {
+		throw invalidEntry(filePath, lineNumber, `is missing ${field}`);
+	}
+}
+
+function expectOptionalBooleanField(
+	entry: Record<string, unknown>,
+	field: string,
+	filePath: string,
+	lineNumber: number,
+): void {
+	if (entry[field] !== undefined && typeof entry[field] !== "boolean") {
+		throw invalidEntry(filePath, lineNumber, `has invalid ${field}`);
+	}
+}
+
+function expectOptionalStringField(
+	entry: Record<string, unknown>,
+	field: string,
+	filePath: string,
+	lineNumber: number,
+): void {
+	if (entry[field] !== undefined && typeof entry[field] !== "string") {
+		throw invalidEntry(filePath, lineNumber, `has invalid ${field}`);
+	}
+}
+
+function validateEntryPayload(entry: Record<string, unknown>, filePath: string, lineNumber: number): void {
+	switch (entry.type) {
+		case "message":
+			if (!isRecord(entry.message)) throw invalidEntry(filePath, lineNumber, "is missing message");
+			break;
+		case "thinking_level_change":
+			expectStringField(entry, "thinkingLevel", filePath, lineNumber);
+			break;
+		case "model_change":
+			expectStringField(entry, "provider", filePath, lineNumber);
+			expectStringField(entry, "modelId", filePath, lineNumber);
+			break;
+		case "compaction":
+			expectStringField(entry, "summary", filePath, lineNumber);
+			expectStringField(entry, "firstKeptEntryId", filePath, lineNumber);
+			expectNumberField(entry, "tokensBefore", filePath, lineNumber);
+			expectOptionalBooleanField(entry, "fromHook", filePath, lineNumber);
+			break;
+		case "branch_summary":
+			expectStringField(entry, "fromId", filePath, lineNumber);
+			expectStringField(entry, "summary", filePath, lineNumber);
+			expectOptionalBooleanField(entry, "fromHook", filePath, lineNumber);
+			break;
+		case "custom":
+			expectStringField(entry, "customType", filePath, lineNumber);
+			break;
+		case "custom_message":
+			expectStringField(entry, "customType", filePath, lineNumber);
+			if (typeof entry.content !== "string" && !Array.isArray(entry.content)) {
+				throw invalidEntry(filePath, lineNumber, "has invalid content");
+			}
+			if (typeof entry.display !== "boolean") throw invalidEntry(filePath, lineNumber, "has invalid display");
+			break;
+		case "label":
+			expectStringField(entry, "targetId", filePath, lineNumber);
+			expectOptionalStringField(entry, "label", filePath, lineNumber);
+			break;
+		case "session_info":
+			expectOptionalStringField(entry, "name", filePath, lineNumber);
+			break;
+		case "leaf":
+			if (entry.targetId !== null && typeof entry.targetId !== "string") {
+				throw invalidEntry(filePath, lineNumber, "has invalid targetId");
+			}
+			break;
+		default:
+			throw invalidEntry(filePath, lineNumber, `has unknown entry type "${String(entry.type)}"`);
+	}
 }
 
 function parseHeaderLine(line: string, filePath: string): SessionHeader {
@@ -100,14 +158,8 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
 	if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
 		throw invalidEntry(filePath, lineNumber, "is missing timestamp");
 	}
-	if (parsed.type === "leaf" && parsed.targetId !== null && typeof parsed.targetId !== "string") {
-		throw invalidEntry(filePath, lineNumber, "has invalid targetId");
-	}
+	validateEntryPayload(parsed, filePath, lineNumber);
 	return parsed as unknown as SessionTreeEntry;
-}
-
-function leafIdAfterEntry(entry: SessionTreeEntry): string | null {
-	return entry.type === "leaf" ? entry.targetId : entry.id;
 }
 
 function headerToSessionMetadata(header: SessionHeader, path: string): JsonlSessionMetadata {
@@ -149,9 +201,14 @@ async function loadJsonlStorage(
 
 	const header = parseHeaderLine(lines[0]!, filePath);
 	const entries: SessionTreeEntry[] = [];
+	const entryIds = new Set<string>();
 	let leafId: string | null = null;
 	for (let i = 1; i < lines.length; i++) {
 		const entry = parseEntryLine(lines[i]!, filePath, i + 1);
+		if (entryIds.has(entry.id)) {
+			throw invalidEntry(filePath, i + 1, `has duplicate entry id "${entry.id}"`);
+		}
+		entryIds.add(entry.id);
 		entries.push(entry);
 		leafId = leafIdAfterEntry(entry);
 	}
@@ -248,6 +305,9 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	}
 
 	async appendEntry(entry: SessionTreeEntry): Promise<void> {
+		if (this.byId.has(entry.id)) {
+			throw new SessionError("invalid_entry", `Entry ${entry.id} already exists`);
+		}
 		getFileSystemResultOrThrow(
 			await this.fs.appendFile(this.filePath, `${JSON.stringify(entry)}\n`),
 			`Failed to append session entry ${entry.id}`,

@@ -122,3 +122,11 @@ export function parseStreamingJson<T = Record<string, unknown>>(partialJson: str
 		}
 	}
 }
+
+export function parseFinalToolCallJson<T = Record<string, unknown>>(json: string | undefined): T {
+	if (!json || json.trim() === "") {
+		return {} as T;
+	}
+
+	return parseJsonWithRepair<T>(json);
+}

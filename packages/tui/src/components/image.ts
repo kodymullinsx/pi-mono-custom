@@ -8,6 +8,7 @@ import {
 	renderImage,
 } from "../terminal-image.js";
 import type { Component } from "../tui.js";
+import { truncateToWidth } from "../utils.js";
 
 export interface ImageTheme {
 	fallbackColor: (str: string) => string;
@@ -24,7 +25,7 @@ export interface ImageOptions {
 export class Image implements Component {
 	private base64Data: string;
 	private mimeType: string;
-	private dimensions: ImageDimensions;
+	private dimensions?: ImageDimensions;
 	private theme: ImageTheme;
 	private options: ImageOptions;
 	private imageId?: number;
@@ -43,7 +44,7 @@ export class Image implements Component {
 		this.mimeType = mimeType;
 		this.theme = theme;
 		this.options = options;
-		this.dimensions = dimensions || getImageDimensions(base64Data, mimeType) || { widthPx: 800, heightPx: 600 };
+		this.dimensions = dimensions || getImageDimensions(base64Data, mimeType) || undefined;
 		this.imageId = options.imageId;
 	}
 
@@ -70,7 +71,7 @@ export class Image implements Component {
 		const caps = getCapabilities();
 		let lines: string[];
 
-		if (caps.images) {
+		if (caps.images && this.dimensions) {
 			if (caps.images === "kitty" && this.imageId === undefined) {
 				this.imageId = allocateImageId();
 			}
@@ -110,17 +111,27 @@ export class Image implements Component {
 					lines.push(moveUp + result.sequence);
 				}
 			} else {
-				const fallback = imageFallback(this.mimeType, this.dimensions, this.options.filename);
-				lines = [this.theme.fallbackColor(fallback)];
+				lines = [this.renderFallback(width)];
 			}
 		} else {
-			const fallback = imageFallback(this.mimeType, this.dimensions, this.options.filename);
-			lines = [this.theme.fallbackColor(fallback)];
+			lines = [this.renderFallback(width)];
 		}
 
 		this.cachedLines = lines;
 		this.cachedWidth = width;
 
 		return lines;
+	}
+
+	private renderFallback(width: number): string {
+		const fallback = this.dimensions
+			? imageFallback(this.mimeType, this.dimensions, this.options.filename)
+			: this.unknownDimensionsFallback();
+		return truncateToWidth(this.theme.fallbackColor(fallback), width, "");
+	}
+
+	private unknownDimensionsFallback(): string {
+		const label = this.options.filename ? `${this.options.filename} (${this.mimeType})` : this.mimeType;
+		return `[Image: ${label}, unknown dimensions]`;
 	}
 }

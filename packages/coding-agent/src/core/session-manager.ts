@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	openSync,
@@ -418,20 +419,34 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
 
 /** Exported for compaction.test.ts */
 export function parseSessionEntries(content: string): FileEntry[] {
-	const entries: FileEntry[] = [];
-	const lines = content.trim().split("\n");
+	return parseSessionEntriesWithDiagnostics(content).entries;
+}
 
+interface ParsedSessionEntries {
+	entries: FileEntry[];
+	malformedLineCount: number;
+}
+
+function parseSessionEntriesWithDiagnostics(content: string): ParsedSessionEntries {
+	const entries: FileEntry[] = [];
+	const trimmed = content.trim();
+	if (!trimmed) {
+		return { entries, malformedLineCount: 0 };
+	}
+
+	let malformedLineCount = 0;
+	const lines = trimmed.split("\n");
 	for (const line of lines) {
 		if (!line.trim()) continue;
 		try {
 			const entry = JSON.parse(line) as FileEntry;
 			entries.push(entry);
 		} catch {
-			// Skip malformed lines
+			malformedLineCount++;
 		}
 	}
 
-	return entries;
+	return { entries, malformedLineCount };
 }
 
 function hydratePersistedAttachmentBlock(
@@ -452,9 +467,12 @@ function hydratePersistedAttachmentBlock(
 
 	const absolutePath = join(getAttachmentDirForSessionFile(sessionFile), ref.file);
 	if (!existsSync(absolutePath)) {
+		const label = ref.fileName
+			? `${ref.attachmentType} attachment "${ref.fileName}"`
+			: `${ref.attachmentType} attachment`;
 		return {
 			type: "text",
-			text: block.text,
+			text: `[${label} missing: expected sidecar file ${absolutePath}]`,
 		};
 	}
 
@@ -654,34 +672,57 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
 
 /** Exported for testing */
 export function loadEntriesFromFile(filePath: string, options?: { hydrateAttachments?: boolean }): FileEntry[] {
-	if (!existsSync(filePath)) return [];
+	return loadEntriesFromFileWithDiagnostics(filePath, options).entries;
+}
 
-	const content = readFileSync(filePath, "utf8");
-	const entries: FileEntry[] = [];
-	const lines = content.trim().split("\n");
+interface LoadEntriesFromFileResult {
+	entries: FileEntry[];
+	malformedLineCount: number;
+	invalidHeader: boolean;
+}
 
-	for (const line of lines) {
-		if (!line.trim()) continue;
-		try {
-			const entry = JSON.parse(line) as FileEntry;
-			entries.push(entry);
-		} catch {
-			// Skip malformed lines
-		}
+function loadEntriesFromFileWithDiagnostics(
+	filePath: string,
+	options?: { hydrateAttachments?: boolean },
+): LoadEntriesFromFileResult {
+	if (!existsSync(filePath)) {
+		return { entries: [], malformedLineCount: 0, invalidHeader: false };
 	}
 
+	const content = readFileSync(filePath, "utf8");
+	const parsed = parseSessionEntriesWithDiagnostics(content);
+	const entries = parsed.entries;
+
 	// Validate session header
-	if (entries.length === 0) return entries;
+	if (entries.length === 0) {
+		return {
+			entries,
+			malformedLineCount: parsed.malformedLineCount,
+			invalidHeader: content.trim().length > 0,
+		};
+	}
 	const header = entries[0];
 	if (header.type !== "session" || typeof (header as any).id !== "string") {
-		return [];
+		return {
+			entries: [],
+			malformedLineCount: parsed.malformedLineCount,
+			invalidHeader: true,
+		};
 	}
 
 	if (!options?.hydrateAttachments) {
-		return entries;
+		return {
+			entries,
+			malformedLineCount: parsed.malformedLineCount,
+			invalidHeader: false,
+		};
 	}
 
-	return entries.map((entry) => hydrateEntryFromPersistence(entry, filePath));
+	return {
+		entries: entries.map((entry) => hydrateEntryFromPersistence(entry, filePath)),
+		malformedLineCount: parsed.malformedLineCount,
+		invalidHeader: false,
+	};
 }
 
 function isValidSessionFile(filePath: string): boolean {
@@ -938,6 +979,7 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	private recoveryDiagnostics: string[] = [];
 
 	private constructor(cwd: string, sessionDir: string, sessionFile: string | undefined, persist: boolean) {
 		this.cwd = cwd;
@@ -958,11 +1000,22 @@ export class SessionManager {
 	setSessionFile(sessionFile: string): void {
 		this.sessionFile = resolve(sessionFile);
 		if (existsSync(this.sessionFile)) {
-			this.fileEntries = loadEntriesFromFile(this.sessionFile, { hydrateAttachments: true });
+			const loadResult = loadEntriesFromFileWithDiagnostics(this.sessionFile, { hydrateAttachments: true });
+			this.fileEntries = loadResult.entries;
+			let shouldRewriteLoadedFile = false;
+			if (loadResult.malformedLineCount > 0 && this.fileEntries.length > 0) {
+				this._preserveRecoveredSessionFile(
+					`skipped ${loadResult.malformedLineCount} malformed JSONL line(s) while loading`,
+				);
+				shouldRewriteLoadedFile = true;
+			}
 
 			// If file was empty or corrupted (no valid header), truncate and start fresh
 			// to avoid appending messages without a session header (which breaks the session)
 			if (this.fileEntries.length === 0) {
+				if (loadResult.invalidHeader || loadResult.malformedLineCount > 0) {
+					this._preserveRecoveredSessionFile("missing valid session header");
+				}
 				const explicitPath = this.sessionFile;
 				this.newSession();
 				this.sessionFile = explicitPath;
@@ -975,6 +1028,10 @@ export class SessionManager {
 			this.sessionId = header?.id ?? createSessionId();
 
 			if (migrateToCurrentVersion(this.fileEntries)) {
+				shouldRewriteLoadedFile = true;
+			}
+
+			if (shouldRewriteLoadedFile) {
 				this._rewriteFile();
 			}
 
@@ -984,6 +1041,33 @@ export class SessionManager {
 			const explicitPath = this.sessionFile;
 			this.newSession();
 			this.sessionFile = explicitPath; // preserve explicit path from --session flag
+		}
+	}
+
+	getRecoveryDiagnostics(): string[] {
+		return [...this.recoveryDiagnostics];
+	}
+
+	private _preserveRecoveredSessionFile(reason: string): void {
+		if (!this.sessionFile || !existsSync(this.sessionFile)) {
+			return;
+		}
+
+		const message = `Recovered session file after ${reason}`;
+		try {
+			const stats = statSync(this.sessionFile);
+			if (stats.size === 0) {
+				this.recoveryDiagnostics.push(message);
+				return;
+			}
+
+			const backupPath = `${this.sessionFile}.corrupt.${Date.now()}-${randomUUID().slice(0, 8)}`;
+			copyFileSync(this.sessionFile, backupPath);
+			this.recoveryDiagnostics.push(`${message}; backup written to ${backupPath}`);
+		} catch (error) {
+			this.recoveryDiagnostics.push(
+				`${message}; backup failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	}
 

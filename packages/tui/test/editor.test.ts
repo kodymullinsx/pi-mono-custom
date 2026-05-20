@@ -2069,6 +2069,51 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.isShowingAutocomplete(), false);
 		});
 
+		it("recovers autocomplete after a provider rejection", async () => {
+			const tui = createTestTUI();
+			const editor = new Editor(tui, defaultEditorTheme);
+			let calls = 0;
+			let observedError: Error | undefined;
+			tui.onError = (error) => {
+				observedError = error as Error;
+			};
+
+			const mockProvider: AutocompleteProvider = {
+				getSuggestions: async (_lines, _cursorLine, _cursorCol, options) => {
+					if (!options.force) {
+						return null;
+					}
+					calls += 1;
+					if (calls === 1) {
+						throw new Error("provider failed");
+					}
+					return {
+						items: [
+							{ value: "src/", label: "src/" },
+							{ value: "src.txt", label: "src.txt" },
+						],
+						prefix: "src",
+					};
+				},
+				applyCompletion,
+			};
+
+			editor.setAutocompleteProvider(mockProvider);
+			editor.handleInput("s");
+			editor.handleInput("r");
+			editor.handleInput("c");
+
+			editor.handleInput("\t");
+			await flushAutocomplete();
+			assert.strictEqual(editor.isShowingAutocomplete(), false);
+			assert.match(observedError?.message ?? "", /provider failed/);
+
+			editor.handleInput("\t");
+			await flushAutocomplete();
+			assert.strictEqual(calls, 2);
+			assert.strictEqual(editor.isShowingAutocomplete(), true);
+		});
+
 		it("keeps suggestions open when typing in force mode (Tab-triggered)", async () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 

@@ -22,16 +22,22 @@ function getEnv(): NodeJS.ProcessEnv {
 	}
 }
 
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { globSync } from "glob";
-import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { resolveSpawnCommand } from "../utils/child-process.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import { isStdoutTakenOver } from "./output-guard.js";
+import {
+	addIgnoreRules,
+	createIgnoreMatcher,
+	type IgnoreMatcher,
+	toPosixPath,
+	warnResourceDiscovery,
+} from "./resource-ignore.js";
 import type { PackageSource, SettingsManager } from "./settings-manager.js";
 
 const NETWORK_TIMEOUT_MS = 10000;
@@ -194,59 +200,8 @@ const FILE_PATTERNS: Record<ResourceType, RegExp> = {
 	themes: /\.json$/,
 };
 
-const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
-
-type IgnoreMatcher = ReturnType<typeof ignore>;
-
-function toPosixPath(p: string): string {
-	return p.split(sep).join("/");
-}
-
 function getHomeDir(): string {
 	return process.env.HOME || homedir();
-}
-
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
-
-	let pattern = line;
-	let negated = false;
-
-	if (pattern.startsWith("!")) {
-		negated = true;
-		pattern = pattern.slice(1);
-	} else if (pattern.startsWith("\\!")) {
-		pattern = pattern.slice(1);
-	}
-
-	if (pattern.startsWith("/")) {
-		pattern = pattern.slice(1);
-	}
-
-	const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-	return negated ? `!${prefixed}` : prefixed;
-}
-
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
-	const relativeDir = relative(rootDir, dir);
-	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
-
-	for (const filename of IGNORE_FILE_NAMES) {
-		const ignorePath = join(dir, filename);
-		if (!existsSync(ignorePath)) continue;
-		try {
-			const content = readFileSync(ignorePath, "utf-8");
-			const patterns = content
-				.split(/\r?\n/)
-				.map((line) => prefixIgnorePattern(line, prefix))
-				.filter((line): line is string => Boolean(line));
-			if (patterns.length > 0) {
-				ig.add(patterns);
-			}
-		} catch {}
-	}
 }
 
 function isPattern(s: string): boolean {
@@ -285,7 +240,7 @@ function collectFiles(
 	if (!existsSync(dir)) return files;
 
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
+	const ig = ignoreMatcher ?? createIgnoreMatcher();
 	addIgnoreRules(ig, dir, root);
 
 	try {
@@ -303,7 +258,8 @@ function collectFiles(
 					const stats = statSync(fullPath);
 					isDir = stats.isDirectory();
 					isFile = stats.isFile();
-				} catch {
+				} catch (error) {
+					warnResourceDiscovery("Skipping unreadable resource symlink", fullPath, error);
 					continue;
 				}
 			}
@@ -318,8 +274,8 @@ function collectFiles(
 				files.push(fullPath);
 			}
 		}
-	} catch {
-		// Ignore errors
+	} catch (error) {
+		warnResourceDiscovery("Unable to scan resource directory", dir, error);
 	}
 
 	return files;
@@ -337,7 +293,7 @@ function collectSkillEntries(
 	if (!existsSync(dir)) return entries;
 
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
+	const ig = ignoreMatcher ?? createIgnoreMatcher();
 	addIgnoreRules(ig, dir, root);
 
 	try {
@@ -353,7 +309,8 @@ function collectSkillEntries(
 			if (entry.isSymbolicLink()) {
 				try {
 					isFile = statSync(fullPath).isFile();
-				} catch {
+				} catch (error) {
+					warnResourceDiscovery("Skipping unreadable skill symlink", fullPath, error);
 					continue;
 				}
 			}
@@ -378,7 +335,8 @@ function collectSkillEntries(
 					const stats = statSync(fullPath);
 					isDir = stats.isDirectory();
 					isFile = stats.isFile();
-				} catch {
+				} catch (error) {
+					warnResourceDiscovery("Skipping unreadable skill symlink", fullPath, error);
 					continue;
 				}
 			}
@@ -394,8 +352,8 @@ function collectSkillEntries(
 
 			entries.push(...collectSkillEntries(fullPath, mode, ig, root));
 		}
-	} catch {
-		// Ignore errors
+	} catch (error) {
+		warnResourceDiscovery("Unable to scan skill directory", dir, error);
 	}
 
 	return entries;
@@ -444,7 +402,7 @@ function collectAutoPromptEntries(dir: string): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
-	const ig = ignore();
+	const ig = createIgnoreMatcher();
 	addIgnoreRules(ig, dir, dir);
 
 	try {
@@ -458,7 +416,8 @@ function collectAutoPromptEntries(dir: string): string[] {
 			if (entry.isSymbolicLink()) {
 				try {
 					isFile = statSync(fullPath).isFile();
-				} catch {
+				} catch (error) {
+					warnResourceDiscovery("Skipping unreadable prompt symlink", fullPath, error);
 					continue;
 				}
 			}
@@ -470,8 +429,8 @@ function collectAutoPromptEntries(dir: string): string[] {
 				entries.push(fullPath);
 			}
 		}
-	} catch {
-		// Ignore errors
+	} catch (error) {
+		warnResourceDiscovery("Unable to scan prompt directory", dir, error);
 	}
 
 	return entries;
@@ -481,7 +440,7 @@ function collectAutoThemeEntries(dir: string): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
-	const ig = ignore();
+	const ig = createIgnoreMatcher();
 	addIgnoreRules(ig, dir, dir);
 
 	try {
@@ -495,7 +454,8 @@ function collectAutoThemeEntries(dir: string): string[] {
 			if (entry.isSymbolicLink()) {
 				try {
 					isFile = statSync(fullPath).isFile();
-				} catch {
+				} catch (error) {
+					warnResourceDiscovery("Skipping unreadable theme symlink", fullPath, error);
 					continue;
 				}
 			}
@@ -507,8 +467,8 @@ function collectAutoThemeEntries(dir: string): string[] {
 				entries.push(fullPath);
 			}
 		}
-	} catch {
-		// Ignore errors
+	} catch (error) {
+		warnResourceDiscovery("Unable to scan theme directory", dir, error);
 	}
 
 	return entries;
@@ -565,7 +525,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
 	}
 
 	// Otherwise, discover extensions from directory contents
-	const ig = ignore();
+	const ig = createIgnoreMatcher();
 	addIgnoreRules(ig, dir, dir);
 
 	try {
@@ -583,7 +543,8 @@ function collectAutoExtensionEntries(dir: string): string[] {
 					const stats = statSync(fullPath);
 					isDir = stats.isDirectory();
 					isFile = stats.isFile();
-				} catch {
+				} catch (error) {
+					warnResourceDiscovery("Skipping unreadable extension symlink", fullPath, error);
 					continue;
 				}
 			}
@@ -601,8 +562,8 @@ function collectAutoExtensionEntries(dir: string): string[] {
 				}
 			}
 		}
-	} catch {
-		// Ignore errors
+	} catch (error) {
+		warnResourceDiscovery("Unable to scan extension directory", dir, error);
 	}
 
 	return entries;

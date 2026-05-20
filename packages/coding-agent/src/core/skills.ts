@@ -1,11 +1,11 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import ignore from "ignore";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 import { canonicalizePath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { addIgnoreRules, createIgnoreMatcher, type IgnoreMatcher, toPosixPath } from "./resource-ignore.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
 /** Max name length per spec */
@@ -13,57 +13,6 @@ const MAX_NAME_LENGTH = 64;
 
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
-
-const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
-
-type IgnoreMatcher = ReturnType<typeof ignore>;
-
-function toPosixPath(p: string): string {
-	return p.split(sep).join("/");
-}
-
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
-
-	let pattern = line;
-	let negated = false;
-
-	if (pattern.startsWith("!")) {
-		negated = true;
-		pattern = pattern.slice(1);
-	} else if (pattern.startsWith("\\!")) {
-		pattern = pattern.slice(1);
-	}
-
-	if (pattern.startsWith("/")) {
-		pattern = pattern.slice(1);
-	}
-
-	const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-	return negated ? `!${prefixed}` : prefixed;
-}
-
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
-	const relativeDir = relative(rootDir, dir);
-	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
-
-	for (const filename of IGNORE_FILE_NAMES) {
-		const ignorePath = join(dir, filename);
-		if (!existsSync(ignorePath)) continue;
-		try {
-			const content = readFileSync(ignorePath, "utf-8");
-			const patterns = content
-				.split(/\r?\n/)
-				.map((line) => prefixIgnorePattern(line, prefix))
-				.filter((line): line is string => Boolean(line));
-			if (patterns.length > 0) {
-				ig.add(patterns);
-			}
-		} catch {}
-	}
-}
 
 export interface SkillFrontmatter {
 	name?: string;
@@ -186,8 +135,8 @@ function loadSkillsFromDirInternal(
 	}
 
 	const root = rootDir ?? dir;
-	const ig = ignoreMatcher ?? ignore();
-	addIgnoreRules(ig, dir, root);
+	const ig = ignoreMatcher ?? createIgnoreMatcher();
+	addIgnoreRules(ig, dir, root, (diagnostic) => diagnostics.push(diagnostic));
 
 	try {
 		const entries = readdirSync(dir, { withFileTypes: true });
@@ -203,7 +152,12 @@ function loadSkillsFromDirInternal(
 			if (entry.isSymbolicLink()) {
 				try {
 					isFile = statSync(fullPath).isFile();
-				} catch {
+				} catch (error) {
+					diagnostics.push({
+						type: "warning",
+						message: `Unable to inspect skill symlink: ${error instanceof Error ? error.message : String(error)}`,
+						path: fullPath,
+					});
 					continue;
 				}
 			}
@@ -241,8 +195,12 @@ function loadSkillsFromDirInternal(
 					const stats = statSync(fullPath);
 					isDirectory = stats.isDirectory();
 					isFile = stats.isFile();
-				} catch {
-					// Broken symlink, skip it
+				} catch (error) {
+					diagnostics.push({
+						type: "warning",
+						message: `Unable to inspect skill symlink: ${error instanceof Error ? error.message : String(error)}`,
+						path: fullPath,
+					});
 					continue;
 				}
 			}
@@ -270,7 +228,13 @@ function loadSkillsFromDirInternal(
 			}
 			diagnostics.push(...result.diagnostics);
 		}
-	} catch {}
+	} catch (error) {
+		diagnostics.push({
+			type: "warning",
+			message: `Unable to scan skills directory: ${error instanceof Error ? error.message : String(error)}`,
+			path: dir,
+		});
+	}
 
 	return { skills, diagnostics };
 }
