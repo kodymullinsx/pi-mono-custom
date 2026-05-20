@@ -22,10 +22,14 @@ import type {
 	Tool,
 	ToolCall,
 } from "../types.js";
-import { getAssistantErrorMetadata, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
+import {
+	getAssistantErrorMetadata,
+	sanitizeAttachmentMimeType,
+	throwUnsupportedDocumentSerialization,
+} from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import { parseFinalToolCallJson, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
@@ -441,7 +445,7 @@ async function consumeChatStream(
 		const block = output.content[index];
 		if (block.type !== "toolCall") continue;
 		const toolBlock = block as ToolCall & { partialArgs?: string };
-		toolBlock.arguments = parseStreamingJson<Record<string, unknown>>(toolBlock.partialArgs);
+		toolBlock.arguments = parseFinalToolCallJson<Record<string, unknown>>(toolBlock.partialArgs);
 		// Finalize in-place and strip the scratch buffer so replay only
 		// carries parsed arguments.
 		delete toolBlock.partialArgs;
@@ -497,7 +501,10 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 				.map((item) => {
 					if (item.type === "text") return { type: "text", text: sanitizeSurrogates(item.text) };
 					if (item.type === "document") return throwUnsupportedDocumentSerialization(item, "user messages");
-					return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
+					return {
+						type: "image_url",
+						imageUrl: `data:${sanitizeAttachmentMimeType(item.mimeType)};base64,${item.data}`,
+					};
 				});
 			if (content.length > 0) {
 				result.push({ role: "user", content });
@@ -560,7 +567,7 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 			if (part.type !== "image") continue;
 			toolContent.push({
 				type: "image_url",
-				imageUrl: `data:${part.mimeType};base64,${part.data}`,
+				imageUrl: `data:${sanitizeAttachmentMimeType(part.mimeType)};base64,${part.data}`,
 			});
 		}
 		result.push({

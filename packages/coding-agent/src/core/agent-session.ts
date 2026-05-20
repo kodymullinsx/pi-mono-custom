@@ -2419,15 +2419,16 @@ export class AgentSession {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
 
-				setTimeout(() => {
-					this.agent.continue().catch(() => {});
-				}, 100);
+				this._scheduleCompactionContinue(
+					reason,
+					reason === "overflow"
+						? "Context overflow recovery failed after compaction"
+						: "Auto-compaction retry failed",
+				);
 			} else if (this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 				// Kick the loop so queued messages are actually delivered.
-				setTimeout(() => {
-					this.agent.continue().catch(() => {});
-				}, 100);
+				this._scheduleCompactionContinue(reason, "Auto-compaction follow-up failed");
 			}
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
@@ -2445,6 +2446,31 @@ export class AgentSession {
 		} finally {
 			this._autoCompactionAbortController = undefined;
 		}
+	}
+
+	private _formatUnknownError(error: unknown, fallback: string): string {
+		if (error instanceof Error && error.message) {
+			return error.message;
+		}
+		if (typeof error === "string" && error.trim()) {
+			return error;
+		}
+		return fallback;
+	}
+
+	private _scheduleCompactionContinue(reason: "overflow" | "threshold", failurePrefix: string): void {
+		setTimeout(() => {
+			this.agent.continue().catch((error) => {
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+					errorMessage: `${failurePrefix}: ${this._formatUnknownError(error, "continue failed")}`,
+				});
+			});
+		}, 100);
 	}
 
 	/**
@@ -3005,9 +3031,7 @@ export class AgentSession {
 			errorMessage: `${message.errorMessage || "Attachment rejected by model"} [auto-retry removed ${this._describeAttachmentRetryKinds(stripResult.strippedKinds)} from the latest ${stripResult.source === "tool_attachment" ? "tool attachment message" : "user attachment message"}]`,
 		});
 
-		setTimeout(() => {
-			this.agent.continue().catch(() => {});
-		}, 0);
+		this._scheduleRetryContinue(0);
 
 		return true;
 	}
@@ -3083,13 +3107,28 @@ export class AgentSession {
 		this._retryAbortController = undefined;
 
 		// Retry via continue() - use setTimeout to break out of event handler chain
-		setTimeout(() => {
-			this.agent.continue().catch(() => {
-				// Retry failed - will be caught by next agent_end
-			});
-		}, 0);
+		this._scheduleRetryContinue(0);
 
 		return true;
+	}
+
+	private _scheduleRetryContinue(delayMs: number): void {
+		setTimeout(() => {
+			this.agent.continue().catch((error) => this._handleRetryContinueFailure(error));
+		}, delayMs);
+	}
+
+	private _handleRetryContinueFailure(error: unknown): void {
+		const attempt = this._retryAttempt;
+		this._retryAttempt = 0;
+		this._retryAbortController = undefined;
+		this._emit({
+			type: "auto_retry_end",
+			success: false,
+			attempt,
+			finalError: this._formatUnknownError(error, "Retry continuation failed"),
+		});
+		this._resolveRetry();
 	}
 	/**
 	 * Cancel in-progress retry.

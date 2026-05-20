@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHarness, type Harness } from "./harness.js";
 
 function normalizeEventOrder(events: Harness["events"]): string[] {
@@ -25,6 +25,8 @@ describe("AgentSession retry and event characterization", () => {
 	const harnesses: Harness[] = [];
 
 	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
 		while (harnesses.length > 0) {
 			harnesses.pop()?.cleanup();
 		}
@@ -196,6 +198,31 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.session.isStreaming).toBe(false);
 		await harness.session.prompt("follow-up");
 		expect(harness.faux.state.callCount).toBe(4);
+	});
+
+	it("emits retry failure and resolves waiters when scheduled retry continuation rejects", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 } } });
+		harnesses.push(harness);
+		const continueSpy = vi.spyOn(harness.session.agent, "continue").mockRejectedValue(new Error("continue exploded"));
+		const internals = harness.session as unknown as {
+			_handleRetryableError(message: ReturnType<typeof fauxAssistantMessage>): Promise<boolean>;
+			waitForRetry(): Promise<void>;
+		};
+
+		const retryPromise = internals._handleRetryableError(
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+		);
+		expect(await retryPromise).toBe(true);
+
+		const waitPromise = internals.waitForRetry();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await waitPromise;
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(harness.eventsOfType("auto_retry_end")).toMatchObject([
+			{ success: false, attempt: 1, finalError: "continue exploded" },
+		]);
+		expect(harness.session.isRetrying).toBe(false);
 	});
 
 	it("emits extension events before public event subscribers", async () => {

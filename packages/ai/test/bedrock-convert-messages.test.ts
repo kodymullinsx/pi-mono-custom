@@ -156,4 +156,52 @@ describe("bedrock convertMessages skips unknown content types", () => {
 		const p = payload as { messages: Array<{ role: string; content: unknown[] }> };
 		expect(p.messages).toHaveLength(0);
 	});
+
+	it("normalizes document MIME type before selecting the Bedrock document format", async () => {
+		const payload = await capturePayload({
+			messages: [
+				{
+					role: "user",
+					content: [
+						{
+							type: "document",
+							mimeType: "Application/PDF; charset=binary",
+							data: "JVBERi0xLjQ=",
+							fileName: "Evidence.PDF",
+						},
+					],
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		const p = payload as { messages: Array<{ content: Array<{ document?: { format?: string } }> }> };
+		expect(p.messages[0].content[0].document?.format).toBe("pdf");
+	});
+
+	it("returns image attachment retry metadata for Bedrock image serialization failures", async () => {
+		const s = streamBedrock(baseModel, {
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "image", mimeType: "image/png", data: "not-base64" }],
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		let errorEvent: { error: { errorMetadata?: unknown; errorMessage?: string } } | undefined;
+		for await (const event of s) {
+			if (event.type === "error") {
+				errorEvent = event;
+				break;
+			}
+		}
+
+		expect(errorEvent?.error.errorMetadata).toEqual({
+			local: true,
+			attachmentRetryTargets: ["image"],
+		});
+		expect(errorEvent?.error.errorMessage).toContain("Bedrock image has invalid base64 payload");
+	});
 });

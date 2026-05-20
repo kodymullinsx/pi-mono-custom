@@ -17,8 +17,8 @@ export class AttachmentSerializationError extends Error {
 
 const CONTROL_CHARS_PATTERN = /[\x00-\x1f\x7f]+/g;
 const MAX_DISPLAY_NAME_LENGTH = 128;
-// RFC 6838 type/subtype with optional parameters. Allow letters, digits,
-// and "._+-/" so common values like application/vnd.ms-excel survive intact.
+// RFC 6838 type/subtype. MIME parameters are stripped before validation.
+// Allow letters, digits, and "._+-/" so common values like application/vnd.ms-excel survive intact.
 const ALLOWED_MIME_PATTERN = /^[a-zA-Z0-9._+-]+\/[a-zA-Z0-9._+-]+$/;
 
 export function sanitizeDocumentDisplayName(fileName: string | undefined): string {
@@ -30,9 +30,9 @@ export function sanitizeDocumentDisplayName(fileName: string | undefined): strin
 
 export function sanitizeAttachmentMimeType(mimeType: string | undefined): string {
 	if (!mimeType) return "application/octet-stream";
-	const trimmed = mimeType.trim();
-	if (!ALLOWED_MIME_PATTERN.test(trimmed)) return "application/octet-stream";
-	return trimmed.toLowerCase();
+	const bareType = mimeType.split(";", 1)[0]?.trim();
+	if (!bareType || !ALLOWED_MIME_PATTERN.test(bareType)) return "application/octet-stream";
+	return bareType.toLowerCase();
 }
 
 export function formatDocumentSummary(block: DocumentContent): string {
@@ -40,7 +40,7 @@ export function formatDocumentSummary(block: DocumentContent): string {
 }
 
 export function canInlineDocument(block: DocumentContent): boolean {
-	return block.mimeType === "application/pdf";
+	return sanitizeAttachmentMimeType(block.mimeType) === "application/pdf";
 }
 
 export function throwUnsupportedDocumentSerialization(block: DocumentContent, location: AttachmentLocation): never {

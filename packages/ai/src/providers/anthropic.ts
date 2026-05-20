@@ -35,7 +35,7 @@ import {
 } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+import { parseFinalToolCallJson, parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
@@ -655,7 +655,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								partial: output,
 							});
 						} else if (block.type === "toolCall") {
-							block.arguments = parseStreamingJson(block.partialJson);
+							if (block.partialJson.trim().length > 0) {
+								block.arguments = parseFinalToolCallJson(block.partialJson);
+							}
 							// Finalize in-place and strip the scratch buffer so replay only
 							// carries parsed arguments.
 							delete (block as { partialJson?: string }).partialJson;

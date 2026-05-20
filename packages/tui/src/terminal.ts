@@ -10,6 +10,40 @@ const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
 
+type TerminalStopFailure = Error & {
+	cleanupFailures?: Array<{ operation: string; error: unknown }>;
+	primaryError?: unknown;
+};
+
+function collectTerminalStopFailure(current: unknown, operation: string, failure: unknown): unknown {
+	const entry = { operation, error: failure };
+	if (!current) {
+		if (failure instanceof Error) {
+			const error = failure as TerminalStopFailure;
+			error.cleanupFailures = [...(error.cleanupFailures ?? []), entry];
+			return error;
+		}
+
+		const error = new Error(`Terminal stop cleanup failed during ${operation}`) as TerminalStopFailure;
+		error.primaryError = failure;
+		error.cleanupFailures = [entry];
+		return error;
+	}
+
+	if (current instanceof Error) {
+		const error = current as TerminalStopFailure;
+		error.cleanupFailures = [...(error.cleanupFailures ?? []), entry];
+		return error;
+	}
+
+	const error = new Error(`Terminal stop cleanup failed during ${operation}`) as TerminalStopFailure;
+	error.primaryError = current;
+	error.cleanupFailures = [entry];
+	return error;
+}
+
+export type WindowsVTInputStatus = "not_attempted" | "enabled" | "unavailable" | "failed";
+
 /**
  * Minimal terminal interface for TUI
  */
@@ -37,6 +71,12 @@ export interface Terminal {
 
 	// Whether Kitty keyboard protocol is active
 	get kittyProtocolActive(): boolean;
+
+	/**
+	 * Diagnostic status for Windows VT input setup. Undefined means this
+	 * terminal implementation does not perform Windows VT input setup.
+	 */
+	readonly windowsVTInputStatus?: WindowsVTInputStatus;
 
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
@@ -66,9 +106,12 @@ export class ProcessTerminal implements Terminal {
 	private resizeHandler?: () => void;
 	private _kittyProtocolActive = false;
 	private _modifyOtherKeysActive = false;
+	private _started = false;
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
 	private progressInterval?: ReturnType<typeof setInterval>;
+	private modifyOtherKeysFallbackTimer?: ReturnType<typeof setTimeout>;
+	private _windowsVTInputStatus: WindowsVTInputStatus = "not_attempted";
 	private writeLogPath = (() => {
 		const env = process.env.PI_TUI_WRITE_LOG || "";
 		if (!env) return "";
@@ -88,7 +131,12 @@ export class ProcessTerminal implements Terminal {
 		return this._kittyProtocolActive;
 	}
 
+	get windowsVTInputStatus(): WindowsVTInputStatus {
+		return this._windowsVTInputStatus;
+	}
+
 	start(onInput: (data: string) => void, onResize: () => void): void {
+		this._started = true;
 		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
 
@@ -193,8 +241,10 @@ export class ProcessTerminal implements Terminal {
 		this.setupStdinBuffer();
 		process.stdin.on("data", this.stdinDataHandler!);
 		process.stdout.write("\x1b[?u");
-		setTimeout(() => {
-			if (!this._kittyProtocolActive && !this._modifyOtherKeysActive) {
+		this.clearModifyOtherKeysFallbackTimer();
+		this.modifyOtherKeysFallbackTimer = setTimeout(() => {
+			this.modifyOtherKeysFallbackTimer = undefined;
+			if (this._started && !this._kittyProtocolActive && !this._modifyOtherKeysActive) {
 				process.stdout.write("\x1b[>4;2m");
 				this._modifyOtherKeysActive = true;
 			}
@@ -208,6 +258,7 @@ export class ProcessTerminal implements Terminal {
 	 * discards modifier state and Shift+Tab arrives as plain \t.
 	 */
 	private enableWindowsVTInput(): void {
+		this._windowsVTInputStatus = "not_attempted";
 		if (process.platform !== "win32") return;
 		try {
 			// Dynamic require to avoid bundling koffi's 74MB of cross-platform
@@ -223,14 +274,21 @@ export class ProcessTerminal implements Terminal {
 			const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 			const handle = GetStdHandle(STD_INPUT_HANDLE);
 			const mode = new Uint32Array(1);
-			GetConsoleMode(handle, mode);
-			SetConsoleMode(handle, mode[0]! | ENABLE_VIRTUAL_TERMINAL_INPUT);
+			if (!GetConsoleMode(handle, mode)) {
+				this._windowsVTInputStatus = "failed";
+				return;
+			}
+			this._windowsVTInputStatus = SetConsoleMode(handle, mode[0]! | ENABLE_VIRTUAL_TERMINAL_INPUT)
+				? "enabled"
+				: "failed";
 		} catch {
+			this._windowsVTInputStatus = "unavailable";
 			// koffi not available — Shift+Tab won't be distinguishable from Tab
 		}
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
+		this.clearModifyOtherKeysFallbackTimer();
 		if (this._kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
 			// do not generate new Kitty escape sequences.
@@ -269,50 +327,74 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
-		if (this.clearProgressInterval()) {
-			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
+		this._started = false;
+		let stopError: unknown;
+		const runCleanup = (operation: string, cleanup: () => void): void => {
+			try {
+				cleanup();
+			} catch (error) {
+				stopError = collectTerminalStopFailure(stopError, operation, error);
+			}
+		};
+
+		runCleanup("clearModifyOtherKeysFallbackTimer", () => this.clearModifyOtherKeysFallbackTimer());
+		const clearProgress = this.clearProgressInterval();
+		if (clearProgress) {
+			runCleanup("clearProgress", () => process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE));
 		}
 
 		// Disable bracketed paste mode
-		process.stdout.write("\x1b[?2004l");
+		runCleanup("disableBracketedPaste", () => process.stdout.write("\x1b[?2004l"));
 
 		// Disable Kitty keyboard protocol if not already done by drainInput()
 		if (this._kittyProtocolActive) {
-			process.stdout.write("\x1b[<u");
-			this._kittyProtocolActive = false;
-			setKittyProtocolActive(false);
+			runCleanup("disableKittyKeyboardProtocol", () => process.stdout.write("\x1b[<u"));
+			runCleanup("markKittyKeyboardProtocolInactive", () => setKittyProtocolActive(false));
 		}
+		this._kittyProtocolActive = false;
 		if (this._modifyOtherKeysActive) {
-			process.stdout.write("\x1b[>4;0m");
-			this._modifyOtherKeysActive = false;
+			runCleanup("disableModifyOtherKeys", () => process.stdout.write("\x1b[>4;0m"));
 		}
+		this._modifyOtherKeysActive = false;
 
 		// Clean up StdinBuffer
 		if (this.stdinBuffer) {
-			this.stdinBuffer.destroy();
+			runCleanup("destroyStdinBuffer", () => this.stdinBuffer?.destroy());
 			this.stdinBuffer = undefined;
 		}
 
 		// Remove event handlers
 		if (this.stdinDataHandler) {
-			process.stdin.removeListener("data", this.stdinDataHandler);
+			const stdinDataHandler = this.stdinDataHandler;
+			runCleanup("removeStdinDataHandler", () => process.stdin.removeListener("data", stdinDataHandler));
 			this.stdinDataHandler = undefined;
 		}
 		this.inputHandler = undefined;
 		if (this.resizeHandler) {
-			process.stdout.removeListener("resize", this.resizeHandler);
+			const resizeHandler = this.resizeHandler;
+			runCleanup("removeResizeHandler", () => process.stdout.removeListener("resize", resizeHandler));
 			this.resizeHandler = undefined;
 		}
 
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition
 		// where Ctrl+D could close the parent shell over SSH.
-		process.stdin.pause();
+		runCleanup("pauseStdin", () => process.stdin.pause());
 
 		// Restore raw mode state
 		if (process.stdin.setRawMode) {
-			process.stdin.setRawMode(this.wasRaw);
+			runCleanup("restoreRawMode", () => process.stdin.setRawMode!(this.wasRaw));
 		}
+
+		if (stopError) {
+			throw stopError;
+		}
+	}
+
+	private clearModifyOtherKeysFallbackTimer(): void {
+		if (!this.modifyOtherKeysFallbackTimer) return;
+		clearTimeout(this.modifyOtherKeysFallbackTimer);
+		this.modifyOtherKeysFallbackTimer = undefined;
 	}
 
 	write(data: string): void {

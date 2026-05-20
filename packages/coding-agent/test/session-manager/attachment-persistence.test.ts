@@ -141,6 +141,40 @@ describe("SessionManager attachment persistence", () => {
 		});
 	});
 
+	it("surfaces a missing attachment sidecar as an explicit text block on reload", () => {
+		const tempDir = createTempDir();
+		tempDirs.push(tempDir);
+
+		const session = SessionManager.create(tempDir, tempDir);
+		session.appendMessage({
+			role: "user",
+			content: [
+				{ type: "text", text: "Inspect this image." },
+				{ type: "image", mimeType: "image/png", data: USER_IMAGE_DATA },
+			],
+			timestamp: Date.now(),
+		});
+		session.appendMessage(assistantMessage("Done."));
+
+		const sessionFile = session.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		const attachmentDir = sessionFile!.replace(/\.jsonl$/i, ".attachments");
+		const [sidecarFile] = readdirSync(attachmentDir);
+		expect(sidecarFile).toBeDefined();
+		rmSync(join(attachmentDir, sidecarFile!));
+
+		const reloaded = SessionManager.open(sessionFile!, tempDir);
+		const context = reloaded.buildSessionContext();
+		const userMessage = context.messages[0] as { role: "user"; content: Array<{ type: string; text?: string }> };
+		expect(userMessage).toMatchObject({
+			role: "user",
+			content: [{ type: "text", text: "Inspect this image." }, { type: "text" }],
+		});
+		const missingAttachmentBlock = userMessage.content[1] as { type: "text"; text: string };
+		expect(missingAttachmentBlock.text).toContain("image attachment missing");
+		expect(missingAttachmentBlock.text).toContain("expected sidecar file");
+	});
+
 	it("re-persists hydrated attachments when forking a session", () => {
 		const sourceDir = createTempDir();
 		const forkDir = createTempDir();

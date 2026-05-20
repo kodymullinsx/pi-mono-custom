@@ -84,6 +84,7 @@ async function processPdfFile(
 	const attachments = await renderPdfPagesToImageBlocks(absolutePath, {
 		firstPage,
 		lastPage,
+		pageCount,
 		autoResize: options.autoResizeImages,
 		mtimeMs: options.mtimeMs,
 	});
@@ -160,7 +161,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		// Check if file is empty
 		const stats = await stat(absolutePath);
 		if (stats.size === 0) {
-			// Skip empty files
+			text += `<file name="${absolutePath}">[File is empty.]</file>\n`;
 			continue;
 		}
 

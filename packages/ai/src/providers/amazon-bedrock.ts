@@ -50,7 +50,7 @@ import {
 	sanitizeDocumentDisplayName,
 } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import { parseFinalToolCallJson, parseStreamingJson } from "../utils/json-parse.js";
 import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.js";
@@ -463,7 +463,7 @@ function handleContentBlockStop(
 			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });
 			break;
 		case "toolCall":
-			block.arguments = parseStreamingJson(block.partialJson);
+			block.arguments = parseFinalToolCallJson(block.partialJson);
 			// Finalize in-place and strip the scratch buffer so replay only
 			// carries parsed arguments.
 			delete (block as Block).partialJson;
@@ -929,7 +929,7 @@ const BEDROCK_DOCUMENT_NAME_MAX_LENGTH = 64;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/;
 
 function getDocumentFormat(mimeType: string): BedrockDocumentFormat | undefined {
-	return BEDROCK_DOCUMENT_FORMAT_BY_MIME[mimeType];
+	return BEDROCK_DOCUMENT_FORMAT_BY_MIME[sanitizeAttachmentMimeType(mimeType)];
 }
 
 function sanitizeBedrockDocumentName(fileName: string | undefined): string {
@@ -942,10 +942,11 @@ function sanitizeBedrockDocumentName(fileName: string | undefined): string {
 }
 
 function createDocumentBlock(block: DocumentContent) {
-	const format = getDocumentFormat(block.mimeType);
+	const mimeType = sanitizeAttachmentMimeType(block.mimeType);
+	const format = getDocumentFormat(mimeType);
 	if (!format) {
 		throw new AttachmentSerializationError(
-			`Bedrock does not support documents with MIME type "${sanitizeAttachmentMimeType(block.mimeType)}" (${sanitizeDocumentDisplayName(block.fileName)}). Supported types: ${Object.keys(BEDROCK_DOCUMENT_FORMAT_BY_MIME).join(", ")}.`,
+			`Bedrock does not support documents with MIME type "${mimeType}" (${sanitizeDocumentDisplayName(block.fileName)}). Supported types: ${Object.keys(BEDROCK_DOCUMENT_FORMAT_BY_MIME).join(", ")}.`,
 			["document"],
 		);
 	}
@@ -983,8 +984,9 @@ function convertAttachmentToBedrockBlock(block: PromptContentBlock): BedrockAtta
 }
 
 function createImageBlock(mimeType: string, data: string) {
+	const normalizedMimeType = sanitizeAttachmentMimeType(mimeType);
 	let format: ImageFormat;
-	switch (mimeType) {
+	switch (normalizedMimeType) {
 		case "image/jpeg":
 		case "image/jpg":
 			format = ImageFormat.JPEG;
@@ -999,7 +1001,14 @@ function createImageBlock(mimeType: string, data: string) {
 			format = ImageFormat.WEBP;
 			break;
 		default:
-			throw new Error(`Unknown image type: ${mimeType}`);
+			throw new AttachmentSerializationError(
+				`Bedrock does not support images with MIME type "${normalizedMimeType}".`,
+				["image"],
+			);
+	}
+
+	if (!BASE64_PATTERN.test(data)) {
+		throw new AttachmentSerializationError("Bedrock image has invalid base64 payload.", ["image"]);
 	}
 
 	const binaryString = atob(data);

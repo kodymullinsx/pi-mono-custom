@@ -81,6 +81,30 @@ function identityConverter(messages: AgentMessage[]): Message[] {
 }
 
 describe("agentLoop with AgentMessage", () => {
+	it("rejects the result when the loop runner fails before agent_end", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: () => {
+				throw new Error("conversion failed");
+			},
+		};
+
+		const stream = agentLoop([userPrompt], context, config, undefined, () => new MockAssistantStream());
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(events.map((event) => event.type)).toEqual(["agent_start", "turn_start", "message_start", "message_end"]);
+		await expect(stream.result()).rejects.toThrow("conversion failed");
+	});
+
 	it("should emit events with AgentMessage types", async () => {
 		const context: AgentContext = {
 			systemPrompt: "You are helpful.",
@@ -1228,6 +1252,88 @@ describe("agentLoop with AgentMessage", () => {
 
 		expect(llmCalls).toBe(1);
 	});
+
+	it("rejects the result when beforeToolCall throws", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute() {
+				return { content: [{ type: "text", text: "should not run" }], details: { value: "should not run" } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [tool] };
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			beforeToolCall: async () => {
+				throw new Error("before hook failed");
+			},
+		};
+		const stream = agentLoop([createUserMessage("echo")], context, config, undefined, () => {
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				mockStream.push({
+					type: "done",
+					reason: "toolUse",
+					message: createAssistantMessage(
+						[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+						"toolUse",
+					),
+				});
+			});
+			return mockStream;
+		});
+
+		for await (const _event of stream) {
+			// consume
+		}
+
+		await expect(stream.result()).rejects.toThrow("before hook failed");
+	});
+
+	it("rejects the result when afterToolCall throws", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: params.value }], details: { value: params.value } };
+			},
+		};
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [tool] };
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			afterToolCall: async () => {
+				throw new Error("after hook failed");
+			},
+		};
+		const stream = agentLoop([createUserMessage("echo")], context, config, undefined, () => {
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				mockStream.push({
+					type: "done",
+					reason: "toolUse",
+					message: createAssistantMessage(
+						[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+						"toolUse",
+					),
+				});
+			});
+			return mockStream;
+		});
+
+		for await (const _event of stream) {
+			// consume
+		}
+
+		await expect(stream.result()).rejects.toThrow("after hook failed");
+	});
 });
 
 describe("agentLoopContinue with AgentMessage", () => {
@@ -1286,6 +1392,28 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const messageEndEvents = events.filter((e) => e.type === "message_end");
 		expect(messageEndEvents.length).toBe(1);
 		expect((messageEndEvents[0] as any).message.role).toBe("assistant");
+	});
+
+	it("rejects the result when the continue runner fails before agent_end", async () => {
+		const userMessage: AgentMessage = createUserMessage("Hello");
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [userMessage],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: () => {
+				throw new Error("continue conversion failed");
+			},
+		};
+
+		const stream = agentLoopContinue(context, config, undefined, () => new MockAssistantStream());
+		for await (const _event of stream) {
+			// consume
+		}
+
+		await expect(stream.result()).rejects.toThrow("continue conversion failed");
 	});
 
 	it("should allow custom message types as last message (caller responsibility)", async () => {

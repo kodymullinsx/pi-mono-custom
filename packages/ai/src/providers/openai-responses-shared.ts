@@ -31,7 +31,7 @@ import type {
 import { sanitizeAttachmentMimeType, throwUnsupportedDocumentSerialization } from "../utils/document-utils.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import { parseFinalToolCallJson, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -83,6 +83,35 @@ export interface ConvertResponsesMessagesOptions {
 
 export interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
+}
+
+export function getResponsesServiceTierCostMultiplier(
+	model: Pick<Model<Api>, "id">,
+	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+): number {
+	switch (serviceTier) {
+		case "flex":
+			return 0.5;
+		case "priority":
+			return model.id === "gpt-5.5" ? 2.5 : 2;
+		default:
+			return 1;
+	}
+}
+
+export function applyResponsesServiceTierPricing(
+	usage: Usage,
+	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	model: Pick<Model<Api>, "id">,
+): void {
+	const multiplier = getResponsesServiceTierCostMultiplier(model, serviceTier);
+	if (multiplier === 1) return;
+
+	usage.cost.input *= multiplier;
+	usage.cost.output *= multiplier;
+	usage.cost.cacheRead *= multiplier;
+	usage.cost.cacheWrite *= multiplier;
+	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 
 // =============================================================================
@@ -433,7 +462,7 @@ export async function processResponsesStream<TApi extends Api>(
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				const previousPartialJson = currentBlock.partialJson;
 				currentBlock.partialJson = event.arguments;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+				currentBlock.arguments = parseFinalToolCallJson(currentBlock.partialJson);
 
 				if (event.arguments.startsWith(previousPartialJson)) {
 					const delta = event.arguments.slice(previousPartialJson.length);
@@ -473,10 +502,11 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				currentBlock = null;
 			} else if (item.type === "function_call") {
-				const args =
+				const finalJson =
 					currentBlock?.type === "toolCall" && currentBlock.partialJson
-						? parseStreamingJson(currentBlock.partialJson)
-						: parseStreamingJson(item.arguments || "{}");
+						? currentBlock.partialJson
+						: item.arguments || "{}";
+				const args = parseFinalToolCallJson(finalJson);
 
 				let toolCall: ToolCall;
 				if (currentBlock?.type === "toolCall") {
@@ -527,7 +557,7 @@ export async function processResponsesStream<TApi extends Api>(
 				output.stopReason = "toolUse";
 			}
 		} else if (event.type === "error") {
-			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+			throw new Error(`Error Code ${event.code ?? "unknown"}: ${event.message ?? "Unknown error"}`);
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;

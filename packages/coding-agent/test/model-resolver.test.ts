@@ -406,6 +406,24 @@ describe("default model selection", () => {
 		expect(result.model?.id).toBe("openai/ghost-model");
 	});
 
+	test("findInitialModel preserves thinking parsed from explicit CLI model patterns", async () => {
+		const registry = {
+			getAll: () => allModels,
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+		const result = await findInitialModel({
+			cliProvider: "anthropic",
+			cliModel: "sonnet:high",
+			scopedModels: [],
+			isContinuing: false,
+			modelRegistry: registry,
+		});
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.model?.id).toBe("claude-sonnet-4-5");
+		expect(result.thinkingLevel).toBe("high");
+	});
+
 	test("findInitialModel selects ai-gateway default when available", async () => {
 		const aiGatewayModel: Model<"anthropic-messages"> = {
 			id: "anthropic/claude-opus-4-6",

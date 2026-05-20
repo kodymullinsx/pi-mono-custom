@@ -172,11 +172,21 @@ describe("NodeExecutionEnv", () => {
 		const signal = controller.signal;
 
 		const results = await Promise.all([
+			env.absolutePath("file.txt", signal),
+			env.joinPath([root, "file.txt"], signal),
 			env.readTextFile("file.txt", signal),
 			env.readTextLines("file.txt", { abortSignal: signal }),
 			env.readBinaryFile("file.txt", signal),
 			env.writeFile("other.txt", "hello", signal),
+			env.appendFile("other.txt", "hello", signal),
+			env.fileInfo("file.txt", signal),
 			env.listDir(".", signal),
+			env.canonicalPath(".", signal),
+			env.exists("file.txt", signal),
+			env.createDir("other", { abortSignal: signal }),
+			env.remove("file.txt", { abortSignal: signal }),
+			env.createTempDir("node-env-test-", signal),
+			env.createTempFile({ abortSignal: signal }),
 		]);
 		for (const result of results) {
 			expect(result.ok).toBe(false);

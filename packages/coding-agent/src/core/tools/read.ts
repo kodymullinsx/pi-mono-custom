@@ -552,6 +552,7 @@ export function createReadToolDefinition(
 									const rawBlocks = await renderPdfPagesToImageBlocks(absolutePath, {
 										firstPage: effectiveRange.firstPage,
 										lastPage: effectiveRange.lastPage,
+										pageCount,
 										autoResize: false,
 										signal,
 										mtimeMs: fileStats.mtimeMs,
@@ -575,6 +576,7 @@ export function createReadToolDefinition(
 									imageBlocks = await renderPdfPagesToImageBlocks(absolutePath, {
 										firstPage: effectiveRange.firstPage,
 										lastPage: effectiveRange.lastPage,
+										pageCount,
 										autoResize: autoResizeImages,
 										signal,
 										mtimeMs: fileStats.mtimeMs,

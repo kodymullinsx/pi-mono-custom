@@ -12,14 +12,18 @@ import type {
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
-	Usage,
 } from "../types.js";
 import { getAssistantErrorMetadata } from "../utils/document-utils.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
+import {
+	applyResponsesServiceTierPricing,
+	convertResponsesMessages,
+	convertResponsesTools,
+	processResponsesStream,
+} from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
@@ -127,7 +131,8 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
-				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+				applyServiceTierPricing: (usage, serviceTier) =>
+					applyResponsesServiceTierPricing(usage, serviceTier, model),
 			});
 
 			if (options?.signal?.aborted) {
@@ -281,33 +286,4 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	}
 
 	return params;
-}
-
-function getServiceTierCostMultiplier(
-	model: Pick<Model<"openai-responses">, "id">,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-): number {
-	switch (serviceTier) {
-		case "flex":
-			return 0.5;
-		case "priority":
-			return model.id === "gpt-5.5" ? 2.5 : 2;
-		default:
-			return 1;
-	}
-}
-
-function applyServiceTierPricing(
-	usage: Usage,
-	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-	model: Pick<Model<"openai-responses">, "id">,
-) {
-	const multiplier = getServiceTierCostMultiplier(model, serviceTier);
-	if (multiplier === 1) return;
-
-	usage.cost.input *= multiplier;
-	usage.cost.output *= multiplier;
-	usage.cost.cacheRead *= multiplier;
-	usage.cost.cacheWrite *= multiplier;
-	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }

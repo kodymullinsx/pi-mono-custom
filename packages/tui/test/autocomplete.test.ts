@@ -78,7 +78,6 @@ describe("CombinedAutocompleteProvider", () => {
 
 			const result = await getSuggestions(provider, lines, cursorLine, cursorCol, true);
 
-			console.log("Result:", result);
 			// This might return null if /A doesn't match anything, which is fine
 			// We're mainly testing that the prefix extraction works
 			if (result) {
@@ -94,7 +93,6 @@ describe("CombinedAutocompleteProvider", () => {
 
 			const result = await getSuggestions(provider, lines, cursorLine, cursorCol, true);
 
-			console.log("Result:", result);
 			assert.strictEqual(result, null, "Should not trigger for slash commands");
 		});
 
@@ -106,7 +104,6 @@ describe("CombinedAutocompleteProvider", () => {
 
 			const result = await getSuggestions(provider, lines, cursorLine, cursorCol, true);
 
-			console.log("Result:", result);
 			assert.notEqual(result, null, "Should trigger for absolute paths in command arguments");
 			if (result) {
 				assert.strictEqual(result.prefix, "/", "Prefix should be '/'");
@@ -538,5 +535,22 @@ describe("CombinedAutocompleteProvider", () => {
 			const applied = provider.applyCompletion([line], 0, cursorCol, item!, result!.prefix);
 			assert.strictEqual(applied.lines[0], '"my folder/test.txt"');
 		});
+	});
+
+	test("falls back to local path completion when fd execution fails", async () => {
+		const rootDir = mkdtempSync(join(tmpdir(), "pi-autocomplete-fd-fallback-"));
+		const baseDir = join(rootDir, "cwd");
+		try {
+			mkdirSync(baseDir, { recursive: true });
+			writeFileSync(join(baseDir, "main.ts"), "content");
+
+			const provider = new CombinedAutocompleteProvider([], baseDir, join(rootDir, "missing-fd"));
+			const line = "@ma";
+			const result = await getSuggestions(provider, [line], 0, line.length);
+
+			assert.ok(result?.items.some((item) => item.value === "@main.ts"));
+		} finally {
+			rmSync(rootDir, { recursive: true, force: true });
+		}
 	});
 });

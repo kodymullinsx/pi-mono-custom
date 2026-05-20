@@ -59,7 +59,7 @@ function makeContext(model: { api: string; provider: string; id: string }): Cont
 				role: "toolResult",
 				toolCallId: "call_img",
 				toolName: "read",
-				content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+				content: [{ type: "image", data: "abc", mimeType: "Image/PNG" }],
 				isError: false,
 				timestamp: now,
 			},
@@ -97,7 +97,7 @@ describe("google-shared image tool result routing", () => {
 		const imageResponse = toolResultTurn.parts?.[1]?.functionResponse;
 		expect(imageResponse).toBeTruthy();
 		expect(imageResponse?.parts).toHaveLength(1);
-		expect(imageResponse?.parts?.[0]?.inlineData).toBeTruthy();
+		expect(imageResponse?.parts?.[0]?.inlineData).toEqual({ mimeType: "image/png", data: "abc" });
 	});
 
 	it("summarizes unsupported user document blocks instead of blindly inlining them", () => {
@@ -110,7 +110,7 @@ describe("google-shared image tool result routing", () => {
 						{ type: "text", text: "inspect this" },
 						{
 							type: "document",
-							mimeType: "application/pdf",
+							mimeType: "Application/PDF; charset=binary",
 							data: "JVBERi0xLjQ=",
 							fileName: "evidence.pdf",
 						},

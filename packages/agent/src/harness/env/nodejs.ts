@@ -1,18 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
-import {
-	access,
-	appendFile,
-	lstat,
-	mkdir,
-	mkdtemp,
-	readdir,
-	readFile,
-	realpath,
-	rm,
-	writeFile,
-} from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -221,11 +210,15 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		this.shellEnv = options.shellEnv;
 	}
 
-	async absolutePath(path: string): Promise<Result<string, FileError>> {
+	async absolutePath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
+		const aborted = abortResult<string>(abortSignal, path);
+		if (aborted) return aborted;
 		return ok(resolvePath(this.cwd, path));
 	}
 
-	async joinPath(parts: string[]): Promise<Result<string, FileError>> {
+	async joinPath(parts: string[], abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
+		const aborted = abortResult<string>(abortSignal);
+		if (aborted) return aborted;
 		return ok(join(...parts));
 	}
 
@@ -417,21 +410,34 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async appendFile(path: string, content: string | Uint8Array): Promise<Result<void, FileError>> {
+	async appendFile(
+		path: string,
+		content: string | Uint8Array,
+		abortSignal?: AbortSignal,
+	): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<void>(abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			await mkdir(resolve(resolved, ".."), { recursive: true });
-			await appendFile(resolved, content);
+			const afterMkdirAbort = abortResult<void>(abortSignal, resolved);
+			if (afterMkdirAbort) return afterMkdirAbort;
+			await writeFile(resolved, content, { flag: "a", signal: abortSignal });
 			return ok(undefined);
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
 	}
 
-	async fileInfo(path: string): Promise<Result<FileInfo, FileError>> {
+	async fileInfo(path: string, abortSignal?: AbortSignal): Promise<Result<FileInfo, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<FileInfo>(abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
-			return fileInfoFromStats(resolved, await lstat(resolved));
+			const stats = await lstat(resolved);
+			const afterStatAbort = abortResult<FileInfo>(abortSignal, resolved);
+			if (afterStatAbort) return afterStatAbort;
+			return fileInfoFromStats(resolved, stats);
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
@@ -461,56 +467,86 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		}
 	}
 
-	async canonicalPath(path: string): Promise<Result<string, FileError>> {
+	async canonicalPath(path: string, abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<string>(abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
-			return ok(await realpath(resolved));
+			const canonical = await realpath(resolved);
+			const afterRealpathAbort = abortResult<string>(abortSignal, resolved);
+			if (afterRealpathAbort) return afterRealpathAbort;
+			return ok(canonical);
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
 	}
 
-	async exists(path: string): Promise<Result<boolean, FileError>> {
-		const result = await this.fileInfo(path);
+	async exists(path: string, abortSignal?: AbortSignal): Promise<Result<boolean, FileError>> {
+		const result = await this.fileInfo(path, abortSignal);
 		if (result.ok) return ok(true);
 		if (result.error.code === "not_found") return ok(false);
 		return err(result.error);
 	}
 
-	async createDir(path: string, options?: { recursive?: boolean }): Promise<Result<void, FileError>> {
+	async createDir(
+		path: string,
+		options?: { recursive?: boolean; abortSignal?: AbortSignal },
+	): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<void>(options?.abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			await mkdir(resolved, { recursive: options?.recursive ?? true });
+			const afterMkdirAbort = abortResult<void>(options?.abortSignal, resolved);
+			if (afterMkdirAbort) return afterMkdirAbort;
 			return ok(undefined);
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
 	}
 
-	async remove(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<Result<void, FileError>> {
+	async remove(
+		path: string,
+		options?: { recursive?: boolean; force?: boolean; abortSignal?: AbortSignal },
+	): Promise<Result<void, FileError>> {
 		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<void>(options?.abortSignal, resolved);
+		if (aborted) return aborted;
 		try {
 			await rm(resolved, { recursive: options?.recursive ?? false, force: options?.force ?? false });
+			const afterRemoveAbort = abortResult<void>(options?.abortSignal, resolved);
+			if (afterRemoveAbort) return afterRemoveAbort;
 			return ok(undefined);
 		} catch (error) {
 			return err(toFileError(error, resolved));
 		}
 	}
 
-	async createTempDir(prefix: string = "tmp-"): Promise<Result<string, FileError>> {
+	async createTempDir(prefix: string = "tmp-", abortSignal?: AbortSignal): Promise<Result<string, FileError>> {
+		const aborted = abortResult<string>(abortSignal);
+		if (aborted) return aborted;
 		try {
-			return ok(await mkdtemp(join(tmpdir(), prefix)));
+			const path = await mkdtemp(join(tmpdir(), prefix));
+			const afterMkdtempAbort = abortResult<string>(abortSignal, path);
+			if (afterMkdtempAbort) return afterMkdtempAbort;
+			return ok(path);
 		} catch (error) {
 			return err(toFileError(error));
 		}
 	}
 
-	async createTempFile(options?: { prefix?: string; suffix?: string }): Promise<Result<string, FileError>> {
-		const dir = await this.createTempDir("tmp-");
+	async createTempFile(options?: {
+		prefix?: string;
+		suffix?: string;
+		abortSignal?: AbortSignal;
+	}): Promise<Result<string, FileError>> {
+		const dir = await this.createTempDir("tmp-", options?.abortSignal);
 		if (!dir.ok) return dir;
 		const filePath = join(dir.value, `${options?.prefix ?? ""}${randomUUID()}${options?.suffix ?? ""}`);
+		const aborted = abortResult<string>(options?.abortSignal, filePath);
+		if (aborted) return aborted;
 		try {
-			await writeFile(filePath, "");
+			await writeFile(filePath, "", { signal: options?.abortSignal });
 			return ok(filePath);
 		} catch (error) {
 			return err(toFileError(error, filePath));

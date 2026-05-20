@@ -81,6 +81,14 @@ describe("Input component", () => {
 			assert.ok(line);
 			assert.ok(visibleWidth(line) <= width);
 		});
+
+		it("does not overflow when width is narrower than the prompt", () => {
+			const input = new Input();
+			const [line] = input.render(1);
+
+			assert.ok(line);
+			assert.ok(visibleWidth(line) <= 1);
+		});
 	});
 
 	describe("Kill ring", () => {
@@ -181,6 +189,24 @@ describe("Input component", () => {
 
 			input.handleInput("\x1by"); // Alt+Y - should do nothing
 			assert.strictEqual(input.getValue(), "otherx");
+		});
+
+		it("setValue clears stale yank state before Alt+Y", () => {
+			const input = new Input();
+
+			input.setValue("first");
+			input.handleInput("\x05"); // Ctrl+E
+			input.handleInput("\x17"); // Ctrl+W - deletes "first"
+			input.setValue("second");
+			input.handleInput("\x05"); // Ctrl+E
+			input.handleInput("\x17"); // Ctrl+W - deletes "second"
+			input.handleInput("\x19"); // Ctrl+Y - yanks "second"
+			assert.strictEqual(input.getValue(), "second");
+
+			input.setValue("replacement");
+			input.handleInput("\x1by"); // Alt+Y should not rewrite replacement using stale yank length
+
+			assert.strictEqual(input.getValue(), "replacement");
 		});
 
 		it("Alt+Y does nothing if kill ring has one entry", () => {

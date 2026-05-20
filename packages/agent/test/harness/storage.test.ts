@@ -37,6 +37,21 @@ describe("InMemorySessionStorage", () => {
 		await expect(storage.setLeafId("missing")).rejects.toThrow("Entry missing not found");
 	});
 
+	it("rejects duplicate appended entries", async () => {
+		const entry: MessageEntry = {
+			type: "message",
+			id: "entry-1",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: createUserMessage("one"),
+		};
+		const storage = new InMemorySessionStorage({ entries: [entry] });
+
+		await expect(storage.appendEntry({ ...entry, message: createAssistantMessage("two") })).rejects.toThrow(
+			"Entry entry-1 already exists",
+		);
+	});
+
 	it("finds entries by type", async () => {
 		const entry: MessageEntry = {
 			type: "message",
@@ -158,6 +173,91 @@ describe("JsonlSessionStorage", () => {
 		};
 		writeFileSync(filePath, `${JSON.stringify(header)}\nnot json\n${JSON.stringify(entry)}\n`);
 		await expect(JsonlSessionStorage.open(env, filePath)).rejects.toMatchObject({ code: "invalid_entry" });
+	});
+
+	it("throws for unknown or incomplete session entry payloads", async () => {
+		const dir = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: dir });
+		const header = {
+			type: "session",
+			version: 3,
+			id: "session-1",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			cwd: dir,
+		};
+		const unknownTypePath = join(dir, "unknown-type.jsonl");
+		writeFileSync(
+			unknownTypePath,
+			`${JSON.stringify(header)}\n${JSON.stringify({
+				type: "unknown",
+				id: "entry-1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:00.000Z",
+			})}\n`,
+		);
+		await expect(JsonlSessionStorage.open(env, unknownTypePath)).rejects.toThrow('unknown entry type "unknown"');
+
+		const missingMessagePath = join(dir, "missing-message.jsonl");
+		writeFileSync(
+			missingMessagePath,
+			`${JSON.stringify(header)}\n${JSON.stringify({
+				type: "message",
+				id: "entry-1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:00.000Z",
+			})}\n`,
+		);
+		await expect(JsonlSessionStorage.open(env, missingMessagePath)).rejects.toThrow("is missing message");
+	});
+
+	it("throws for duplicate session entry ids", async () => {
+		const dir = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: dir });
+		const filePath = join(dir, "duplicate-ids.jsonl");
+		const header = {
+			type: "session",
+			version: 3,
+			id: "session-1",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			cwd: dir,
+		};
+		const first: MessageEntry = {
+			type: "message",
+			id: "entry-1",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: createUserMessage("one"),
+		};
+		const second: MessageEntry = {
+			...first,
+			parentId: "entry-1",
+			timestamp: "2026-01-01T00:00:01.000Z",
+			message: createAssistantMessage("two"),
+		};
+		writeFileSync(filePath, `${JSON.stringify(header)}\n${JSON.stringify(first)}\n${JSON.stringify(second)}\n`);
+
+		await expect(JsonlSessionStorage.open(env, filePath)).rejects.toThrow('duplicate entry id "entry-1"');
+	});
+
+	it("rejects duplicate appended entries before writing them", async () => {
+		const dir = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: dir });
+		const filePath = join(dir, "session.jsonl");
+		const storage = await JsonlSessionStorage.create(env, filePath, { cwd: dir, sessionId: "session-1" });
+		const entry: MessageEntry = {
+			type: "message",
+			id: "entry-1",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: createUserMessage("one"),
+		};
+
+		await storage.appendEntry(entry);
+		await expect(storage.appendEntry({ ...entry, message: createAssistantMessage("two") })).rejects.toThrow(
+			"Entry entry-1 already exists",
+		);
+		const lines = readFileSync(filePath, "utf8").trim().split("\n");
+		expect(lines).toHaveLength(2);
 	});
 
 	it("creates and reads session metadata from the header", async () => {

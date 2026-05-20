@@ -137,11 +137,21 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 		};
 
 		let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+		let receivedTerminalEvent = false;
 
 		const abortHandler = () => {
 			if (reader) {
 				reader.cancel("Request aborted by user").catch(() => {});
 			}
+		};
+
+		const pushProxyEvent = (proxyEvent: ProxyAssistantMessageEvent) => {
+			const event = processProxyEvent(proxyEvent, partial);
+			if (!event) return;
+			if (event.type === "done" || event.type === "error") {
+				receivedTerminalEvent = true;
+			}
+			stream.push(event);
 		};
 
 		if (options.signal) {
@@ -176,7 +186,11 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 				throw new Error(errorMessage);
 			}
 
-			reader = response.body!.getReader();
+			if (!response.body) {
+				throw new Error("Proxy response body is missing");
+			}
+
+			reader = response.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = "";
 
@@ -193,21 +207,21 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 				buffer = lines.pop() || "";
 
 				for (const line of lines) {
-					if (line.startsWith("data: ")) {
-						const data = line.slice(6).trim();
-						if (data) {
-							const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
-							const event = processProxyEvent(proxyEvent, partial);
-							if (event) {
-								stream.push(event);
-							}
-						}
-					}
+					processProxyLine(line, pushProxyEvent);
 				}
+			}
+
+			buffer += decoder.decode();
+			if (buffer.trim()) {
+				processProxyLine(buffer, pushProxyEvent);
 			}
 
 			if (options.signal?.aborted) {
 				throw new Error("Request aborted by user");
+			}
+
+			if (!receivedTerminalEvent) {
+				throw new Error("Proxy stream ended without a terminal event");
 			}
 
 			stream.end();
@@ -230,6 +244,13 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 	})();
 
 	return stream;
+}
+
+function processProxyLine(line: string, pushProxyEvent: (event: ProxyAssistantMessageEvent) => void): void {
+	if (!line.startsWith("data: ")) return;
+	const data = line.slice(6).trim();
+	if (!data) return;
+	pushProxyEvent(JSON.parse(data) as ProxyAssistantMessageEvent);
 }
 
 /**
@@ -344,7 +365,7 @@ function processProxyEvent(
 					partial,
 				};
 			}
-			return undefined;
+			throw new Error("Received toolcall_end for non-toolCall content");
 		}
 
 		case "done":

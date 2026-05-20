@@ -4,7 +4,7 @@
 
 import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
 import type { Context, DocumentContent, ImageContent, Model, StopReason, Tool } from "../types.js";
-import { canInlineDocument, formatDocumentSummary } from "../utils/document-utils.js";
+import { canInlineDocument, formatDocumentSummary, sanitizeAttachmentMimeType } from "../utils/document-utils.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -114,7 +114,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 						if (model.input.includes("document") && canInlineDocument(item)) {
 							return {
 								inlineData: {
-									mimeType: item.mimeType,
+									mimeType: sanitizeAttachmentMimeType(item.mimeType),
 									data: item.data,
 								},
 							};
@@ -123,7 +123,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 					}
 					return {
 						inlineData: {
-							mimeType: item.mimeType,
+							mimeType: sanitizeAttachmentMimeType(item.mimeType),
 							data: item.data,
 						},
 					};
@@ -186,6 +186,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			});
 		} else if (msg.role === "toolResult") {
 			const supportsDocuments = model.input.includes("document");
+			const supportsImages = model.input.includes("image");
 			const imageContent: ImageContent[] = [];
 			const documentContent: DocumentContent[] = [];
 			const textParts: string[] = [];
@@ -194,7 +195,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				if (c.type === "text") {
 					textParts.push(c.text);
 				} else if (c.type === "image") {
-					if (model.input.includes("image")) {
+					if (supportsImages) {
 						imageContent.push(c);
 					}
 				} else if (c.type === "document") {
@@ -225,10 +226,14 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 
 			const mediaParts: Part[] = [];
 			for (const imageBlock of imageContent) {
-				mediaParts.push({ inlineData: { mimeType: imageBlock.mimeType, data: imageBlock.data } });
+				mediaParts.push({
+					inlineData: { mimeType: sanitizeAttachmentMimeType(imageBlock.mimeType), data: imageBlock.data },
+				});
 			}
 			for (const documentBlock of documentContent) {
-				mediaParts.push({ inlineData: { mimeType: documentBlock.mimeType, data: documentBlock.data } });
+				mediaParts.push({
+					inlineData: { mimeType: sanitizeAttachmentMimeType(documentBlock.mimeType), data: documentBlock.data },
+				});
 			}
 
 			const includeId = requiresToolCallId(model.id);
