@@ -3,6 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Keep the source-tree harness self-contained by default. This makes
+# .pi/extensions load even when pi-test.sh is launched from another cwd.
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$SCRIPT_DIR/.pi}"
+
 # Check for --no-env flag
 NO_ENV=false
 ARGS=()
