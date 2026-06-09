@@ -12,14 +12,23 @@ const commandResultCache = new Map<string, string | undefined>();
 /**
  * Resolve a config value (API key, header value, etc.) to an actual value.
  * - If starts with "!", executes the rest as a shell command and uses stdout (cached)
+ * - If starts with "$", resolves the environment variable name after "$"
  * - Otherwise checks environment variable first, then treats as literal (not cached)
  */
 export function resolveConfigValue(config: string): string | undefined {
 	if (config.startsWith("!")) {
 		return executeCommand(config);
 	}
-	const envValue = process.env[config];
+	const envValue = resolveEnvConfig(config);
+	if (config.startsWith("$")) {
+		return envValue;
+	}
 	return envValue || config;
+}
+
+function resolveEnvConfig(config: string): string | undefined {
+	const envName = config.startsWith("$") ? config.slice(1) : config;
+	return envName ? process.env[envName] : undefined;
 }
 
 function executeWithConfiguredShell(command: string): { executed: boolean; value: string | undefined } {
@@ -92,7 +101,10 @@ export function resolveConfigValueUncached(config: string): string | undefined {
 	if (config.startsWith("!")) {
 		return executeCommandUncached(config);
 	}
-	const envValue = process.env[config];
+	const envValue = resolveEnvConfig(config);
+	if (config.startsWith("$")) {
+		return envValue;
+	}
 	return envValue || config;
 }
 

@@ -3,6 +3,7 @@
  * The server manages auth and proxies requests to LLM providers.
  */
 
+import type { ReadableStream } from "node:stream/web";
 // Internal import for JSON parsing utility
 import {
 	type AssistantMessage,
@@ -15,6 +16,14 @@ import {
 	type StopReason,
 	type ToolCall,
 } from "@earendil-works/pi-ai";
+
+type ProxyFetchResponse = {
+	ok: boolean;
+	status: number;
+	statusText: string;
+	json: () => Promise<unknown>;
+	body: ReadableStream<Uint8Array> | null;
+};
 
 // Create stream class matching ProxyMessageEventStream
 class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -159,7 +168,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 		}
 
 		try {
-			const response = await fetch(`${options.proxyUrl}/api/stream`, {
+			const response = (await fetch(`${options.proxyUrl}/api/stream`, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${options.authToken}`,
@@ -171,7 +180,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 					options: buildProxyRequestOptions(options),
 				}),
 				signal: options.signal,
-			});
+			})) as ProxyFetchResponse;
 
 			if (!response.ok) {
 				let errorMessage = `Proxy error: ${response.status} ${response.statusText}`;
@@ -190,12 +199,13 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 				throw new Error("Proxy response body is missing");
 			}
 
-			reader = response.body.getReader();
+			const responseReader = response.body.getReader();
+			reader = responseReader;
 			const decoder = new TextDecoder();
 			let buffer = "";
 
 			while (true) {
-				const { done, value } = await reader.read();
+				const { done, value } = await responseReader.read();
 				if (done) break;
 
 				if (options.signal?.aborted) {

@@ -1209,6 +1209,28 @@ describe("ModelRegistry", () => {
 			}
 		});
 
+		test("apiKey with $ prefix resolves to env value", async () => {
+			const originalEnv = process.env.TEST_DOLLAR_API_KEY_12345;
+			process.env.TEST_DOLLAR_API_KEY_12345 = "dollar-env-api-key-value";
+
+			try {
+				writeRawModelsJson({
+					"custom-provider": providerWithApiKey("$TEST_DOLLAR_API_KEY_12345"),
+				});
+
+				const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+				const apiKey = await registry.getApiKeyForProvider("custom-provider");
+
+				expect(apiKey).toBe("dollar-env-api-key-value");
+			} finally {
+				if (originalEnv === undefined) {
+					delete process.env.TEST_DOLLAR_API_KEY_12345;
+				} else {
+					process.env.TEST_DOLLAR_API_KEY_12345 = originalEnv;
+				}
+			}
+		});
+
 		test("apiKey as literal value is used directly when not an env var", async () => {
 			// Make sure this isn't an env var
 			delete process.env.literal_api_key_value;
