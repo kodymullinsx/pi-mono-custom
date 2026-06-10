@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { PromptContentBlock } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../../types.ts";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "../messages.ts";
 import type {
@@ -47,7 +47,7 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
 			messages.push(
 				createCustomMessage(
 					entry.customType,
-					entry.content as string | (TextContent | ImageContent)[],
+					entry.content as string | PromptContentBlock[],
 					entry.display,
 					entry.details,
 					entry.timestamp,
@@ -203,7 +203,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 
 	async appendCustomMessageEntry<T = unknown>(
 		customType: string,
-		content: string | (TextContent | ImageContent)[],
+		content: string | PromptContentBlock[],
 		display: boolean,
 		details?: T,
 	): Promise<string> {

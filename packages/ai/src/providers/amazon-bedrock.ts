@@ -29,8 +29,9 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
-	ImageContent,
+	DocumentContent,
 	Model,
+	PromptContentBlock,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -43,6 +44,12 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import {
+	AttachmentSerializationError,
+	getAssistantErrorMetadata,
+	sanitizeAttachmentMimeType,
+	sanitizeDocumentDisplayName,
+} from "../utils/document-utils.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.ts";
@@ -268,6 +275,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatBedrockError(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -671,15 +679,29 @@ function createRequiredTextBlock(text: string): ContentBlock.TextMember {
 	return createNonBlankTextBlock(text) ?? { text: EMPTY_TEXT_PLACEHOLDER };
 }
 
-function convertToolResultContent(content: (TextContent | ImageContent)[]): ToolResultContentBlock[] {
+type BedrockAttachmentBlock =
+	| { text: string }
+	| { image: ReturnType<typeof createImageBlock> }
+	| { document: ReturnType<typeof createDocumentBlock> };
+
+function convertAttachmentToBedrockBlock(block: PromptContentBlock): BedrockAttachmentBlock | null {
+	switch (block.type) {
+		case "text":
+			return createNonBlankTextBlock(block.text) ?? null;
+		case "image":
+			return { image: createImageBlock(block.mimeType, block.data) };
+		case "document":
+			return { document: createDocumentBlock(block) };
+		default:
+			return null;
+	}
+}
+
+function convertToolResultContent(content: PromptContentBlock[]): ToolResultContentBlock[] {
 	const result: ToolResultContentBlock[] = [];
 	for (const c of content) {
-		if (c.type === "image") {
-			result.push({ image: createImageBlock(c.mimeType, c.data) });
-		} else {
-			const textBlock = createNonBlankTextBlock(c.text);
-			if (textBlock) result.push(textBlock);
-		}
+		const block = convertAttachmentToBedrockBlock(c);
+		if (block) result.push(block);
 	}
 	if (result.length === 0) result.push({ text: EMPTY_TEXT_PLACEHOLDER });
 	return result;
@@ -703,18 +725,8 @@ function convertMessages(
 					content.push(createRequiredTextBlock(m.content));
 				} else {
 					for (const c of m.content) {
-						switch (c.type) {
-							case "text": {
-								const textBlock = createNonBlankTextBlock(c.text);
-								if (textBlock) content.push(textBlock);
-								break;
-							}
-							case "image":
-								content.push({ image: createImageBlock(c.mimeType, c.data) });
-								break;
-							default:
-								continue;
-						}
+						const block = convertAttachmentToBedrockBlock(c);
+						if (block) content.push(block);
 					}
 					if (content.length === 0) content.push({ text: EMPTY_TEXT_PLACEHOLDER });
 				}
@@ -997,9 +1009,64 @@ function buildAdditionalModelRequestFields(
 	return undefined;
 }
 
+type BedrockDocumentFormat = "csv" | "doc" | "docx" | "html" | "md" | "pdf" | "txt" | "xls" | "xlsx";
+
+const BEDROCK_DOCUMENT_FORMAT_BY_MIME: Record<string, BedrockDocumentFormat> = {
+	"application/pdf": "pdf",
+	"application/msword": "doc",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+	"text/html": "html",
+	"text/markdown": "md",
+	"text/plain": "txt",
+	"text/csv": "csv",
+	"application/vnd.ms-excel": "xls",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+};
+
+const BEDROCK_DOCUMENT_NAME_MAX_LENGTH = 64;
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/;
+
+function getDocumentFormat(mimeType: string): BedrockDocumentFormat | undefined {
+	return BEDROCK_DOCUMENT_FORMAT_BY_MIME[sanitizeAttachmentMimeType(mimeType)];
+}
+
+function sanitizeBedrockDocumentName(fileName: string | undefined): string {
+	const stripped = (fileName ?? "")
+		.replace(/[^A-Za-z0-9 \-()[\]]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	const safe = stripped.length > 0 ? stripped : "document";
+	return safe.length > BEDROCK_DOCUMENT_NAME_MAX_LENGTH ? safe.slice(0, BEDROCK_DOCUMENT_NAME_MAX_LENGTH) : safe;
+}
+
+function createDocumentBlock(block: DocumentContent) {
+	const mimeType = sanitizeAttachmentMimeType(block.mimeType);
+	const format = getDocumentFormat(mimeType);
+	if (!format) {
+		throw new AttachmentSerializationError(
+			`Bedrock does not support documents with MIME type "${mimeType}" (${sanitizeDocumentDisplayName(block.fileName)}). Supported types: ${Object.keys(BEDROCK_DOCUMENT_FORMAT_BY_MIME).join(", ")}.`,
+			["document"],
+		);
+	}
+	if (!BASE64_PATTERN.test(block.data)) {
+		throw new AttachmentSerializationError(
+			`Bedrock document "${sanitizeDocumentDisplayName(block.fileName)}" has invalid base64 payload.`,
+			["document"],
+		);
+	}
+	return {
+		format,
+		name: sanitizeBedrockDocumentName(block.fileName),
+		source: {
+			bytes: Buffer.from(block.data, "base64"),
+		},
+	};
+}
+
 function createImageBlock(mimeType: string, data: string) {
+	const normalizedMimeType = sanitizeAttachmentMimeType(mimeType);
 	let format: ImageFormat;
-	switch (mimeType) {
+	switch (normalizedMimeType) {
 		case "image/jpeg":
 		case "image/jpg":
 			format = ImageFormat.JPEG;
@@ -1014,7 +1081,14 @@ function createImageBlock(mimeType: string, data: string) {
 			format = ImageFormat.WEBP;
 			break;
 		default:
-			throw new Error(`Unknown image type: ${mimeType}`);
+			throw new AttachmentSerializationError(
+				`Bedrock does not support images with MIME type "${normalizedMimeType}".`,
+				["image"],
+			);
+	}
+
+	if (!BASE64_PATTERN.test(data)) {
+		throw new AttachmentSerializationError("Bedrock image has invalid base64 payload.", ["image"]);
 	}
 
 	const binaryString = atob(data);

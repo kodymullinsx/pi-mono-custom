@@ -13,9 +13,9 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
-	ImageContent,
 	Message,
 	Model,
+	PromptContentBlock,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -26,6 +26,12 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import {
+	canInlineDocument,
+	formatDocumentSummary,
+	getAssistantErrorMetadata,
+	sanitizeDocumentDisplayName,
+} from "../utils/document-utils.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
@@ -107,7 +113,7 @@ const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: (TextContent | ImageContent)[]):
+function convertContentBlocks(content: PromptContentBlock[]):
 	| string
 	| Array<
 			| { type: "text"; text: string }
@@ -119,14 +125,21 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 						data: string;
 					};
 			  }
+			| {
+					type: "document";
+					source: {
+						type: "base64";
+						media_type: "application/pdf";
+						data: string;
+					};
+					title?: string;
+			  }
 	  > {
-	// If only text blocks, return as concatenated string for simplicity
-	const hasImages = content.some((c) => c.type === "image");
-	if (!hasImages) {
-		return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
+	const hasStructuredContent = content.some((block) => block.type === "image" || block.type === "document");
+	if (!hasStructuredContent) {
+		return sanitizeSurrogates(content.map((block) => (block as TextContent).text).join("\n"));
 	}
 
-	// If we have images, convert to content block array
 	const blocks = content.map((block) => {
 		if (block.type === "text") {
 			return {
@@ -134,22 +147,41 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 				text: sanitizeSurrogates(block.text),
 			};
 		}
+
+		if (block.type === "image") {
+			return {
+				type: "image" as const,
+				source: {
+					type: "base64" as const,
+					media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+					data: block.data,
+				},
+			};
+		}
+
+		if (canInlineDocument(block)) {
+			return {
+				type: "document" as const,
+				source: {
+					type: "base64" as const,
+					media_type: "application/pdf" as const,
+					data: block.data,
+				},
+				...(block.fileName ? { title: sanitizeDocumentDisplayName(block.fileName) } : {}),
+			};
+		}
+
 		return {
-			type: "image" as const,
-			source: {
-				type: "base64" as const,
-				media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-				data: block.data,
-			},
+			type: "text" as const,
+			text: sanitizeSurrogates(formatDocumentSummary(block)),
 		};
 	});
 
-	// If only images (no text), add placeholder text block
 	const hasText = blocks.some((b) => b.type === "text");
 	if (!hasText) {
 		blocks.unshift({
 			type: "text" as const,
-			text: "(see attached image)",
+			text: "(see attached file)",
 		});
 	}
 
@@ -701,6 +733,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -1024,26 +1057,18 @@ function convertMessages(
 					});
 				}
 			} else {
-				const blocks: ContentBlockParam[] = msg.content.map((item) => {
-					if (item.type === "text") {
-						return {
-							type: "text",
-							text: sanitizeSurrogates(item.text),
-						};
-					} else {
-						return {
-							type: "image",
-							source: {
-								type: "base64",
-								media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-								data: item.data,
-							},
-						};
-					}
-				});
-				const filteredBlocks = blocks.filter((b) => {
-					if (b.type === "text") {
-						return b.text.trim().length > 0;
+				const convertedContent = convertContentBlocks(msg.content);
+				if (typeof convertedContent === "string") {
+					if (convertedContent.trim().length === 0) continue;
+					params.push({
+						role: "user",
+						content: convertedContent,
+					});
+					continue;
+				}
+				const filteredBlocks = convertedContent.filter((block) => {
+					if (block.type === "text") {
+						return block.text.trim().length > 0;
 					}
 					return true;
 				});
@@ -1154,7 +1179,10 @@ function convertMessages(
 				const lastBlock = lastMessage.content[lastMessage.content.length - 1];
 				if (
 					lastBlock &&
-					(lastBlock.type === "text" || lastBlock.type === "image" || lastBlock.type === "tool_result")
+					(lastBlock.type === "text" ||
+						lastBlock.type === "image" ||
+						lastBlock.type === "document" ||
+						lastBlock.type === "tool_result")
 				) {
 					(lastBlock as any).cache_control = cacheControl;
 				}

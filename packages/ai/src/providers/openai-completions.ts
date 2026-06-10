@@ -15,6 +15,7 @@ import type {
 	AssistantMessage,
 	CacheRetention,
 	Context,
+	DocumentContent,
 	ImageContent,
 	Message,
 	Model,
@@ -29,6 +30,11 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import {
+	getAssistantErrorMetadata,
+	sanitizeAttachmentMimeType,
+	throwUnsupportedDocumentSerialization,
+} from "../utils/document-utils.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
@@ -72,6 +78,10 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 
 function isImageContentBlock(block: { type: string }): block is ImageContent {
 	return block.type === "image";
+}
+
+function isDocumentContentBlock(block: { type: string }): block is DocumentContent {
+	return block.type === "document";
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
@@ -414,6 +424,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
@@ -800,14 +811,16 @@ export function convertMessages(
 							type: "text",
 							text: sanitizeSurrogates(item.text),
 						} satisfies ChatCompletionContentPartText;
-					} else {
-						return {
-							type: "image_url",
-							image_url: {
-								url: `data:${item.mimeType};base64,${item.data}`,
-							},
-						} satisfies ChatCompletionContentPartImage;
 					}
+					if (item.type === "document") {
+						return throwUnsupportedDocumentSerialization(item, "user messages");
+					}
+					return {
+						type: "image_url",
+						image_url: {
+							url: `data:${sanitizeAttachmentMimeType(item.mimeType)};base64,${item.data}`,
+						},
+					} satisfies ChatCompletionContentPartImage;
 				});
 				if (content.length === 0) continue;
 				params.push({
@@ -929,6 +942,10 @@ export function convertMessages(
 					.map((block) => block.text)
 					.join("\n");
 				const hasImages = toolMsg.content.some((c) => c.type === "image");
+				const documentBlock = toolMsg.content.find(isDocumentContentBlock);
+				if (documentBlock) {
+					throwUnsupportedDocumentSerialization(documentBlock, "tool results");
+				}
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;
@@ -949,7 +966,7 @@ export function convertMessages(
 							imageBlocks.push({
 								type: "image_url",
 								image_url: {
-									url: `data:${block.mimeType};base64,${block.data}`,
+									url: `data:${sanitizeAttachmentMimeType(block.mimeType)};base64,${block.data}`,
 								},
 							});
 						}

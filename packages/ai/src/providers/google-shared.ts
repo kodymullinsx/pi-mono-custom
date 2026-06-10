@@ -3,7 +3,8 @@
  */
 
 import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
-import type { Context, ImageContent, Model, StopReason, TextContent, Tool } from "../types.ts";
+import type { Context, DocumentContent, ImageContent, Model, StopReason, Tool } from "../types.ts";
+import { canInlineDocument, formatDocumentSummary, sanitizeAttachmentMimeType } from "../utils/document-utils.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { transformMessages } from "./transform-messages.ts";
 
@@ -108,14 +109,24 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				const parts: Part[] = msg.content.map((item) => {
 					if (item.type === "text") {
 						return { text: sanitizeSurrogates(item.text) };
-					} else {
-						return {
-							inlineData: {
-								mimeType: item.mimeType,
-								data: item.data,
-							},
-						};
 					}
+					if (item.type === "document") {
+						if (model.input.includes("document") && canInlineDocument(item)) {
+							return {
+								inlineData: {
+									mimeType: sanitizeAttachmentMimeType(item.mimeType),
+									data: item.data,
+								},
+							};
+						}
+						return { text: sanitizeSurrogates(formatDocumentSummary(item)) };
+					}
+					return {
+						inlineData: {
+							mimeType: sanitizeAttachmentMimeType(item.mimeType),
+							data: item.data,
+						},
+					};
 				});
 				if (parts.length === 0) continue;
 				contents.push({
@@ -149,11 +160,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 							text: sanitizeSurrogates(block.thinking),
 							...(thoughtSignature && { thoughtSignature }),
 						});
-					} else {
-						parts.push({
-							text: sanitizeSurrogates(block.thinking),
-						});
+						continue;
 					}
+					parts.push({
+						text: sanitizeSurrogates(block.thinking),
+					});
 				} else if (block.type === "toolCall") {
 					const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature);
 					const part: Part = {
@@ -174,15 +185,32 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				parts,
 			});
 		} else if (msg.role === "toolResult") {
-			// Extract text and image content
-			const textContent = msg.content.filter((c): c is TextContent => c.type === "text");
-			const textResult = textContent.map((c) => c.text).join("\n");
-			const imageContent = model.input.includes("image")
-				? msg.content.filter((c): c is ImageContent => c.type === "image")
-				: [];
+			const supportsDocuments = model.input.includes("document");
+			const supportsImages = model.input.includes("image");
+			const imageContent: ImageContent[] = [];
+			const documentContent: DocumentContent[] = [];
+			const textParts: string[] = [];
 
+			for (const c of msg.content) {
+				if (c.type === "text") {
+					textParts.push(c.text);
+				} else if (c.type === "image") {
+					if (supportsImages) {
+						imageContent.push(c);
+					}
+				} else if (c.type === "document") {
+					if (supportsDocuments && canInlineDocument(c)) {
+						documentContent.push(c);
+					} else {
+						textParts.push(formatDocumentSummary(c));
+					}
+				}
+			}
+
+			const textResult = textParts.join("\n");
 			const hasText = textResult.length > 0;
 			const hasImages = imageContent.length > 0;
+			const hasDocuments = documentContent.length > 0;
 
 			// Gemini 3+ models support multimodal function responses with images nested inside
 			// functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /
@@ -190,21 +218,30 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
 			// Use "output" key for success, "error" key for errors as per SDK documentation
-			const responseValue = hasText ? sanitizeSurrogates(textResult) : hasImages ? "(see attached image)" : "";
+			const responseValue = hasText
+				? sanitizeSurrogates(textResult)
+				: hasImages || hasDocuments
+					? "(see attached file)"
+					: "";
 
-			const imageParts: Part[] = imageContent.map((imageBlock) => ({
-				inlineData: {
-					mimeType: imageBlock.mimeType,
-					data: imageBlock.data,
-				},
-			}));
+			const mediaParts: Part[] = [];
+			for (const imageBlock of imageContent) {
+				mediaParts.push({
+					inlineData: { mimeType: sanitizeAttachmentMimeType(imageBlock.mimeType), data: imageBlock.data },
+				});
+			}
+			for (const documentBlock of documentContent) {
+				mediaParts.push({
+					inlineData: { mimeType: sanitizeAttachmentMimeType(documentBlock.mimeType), data: documentBlock.data },
+				});
+			}
 
 			const includeId = requiresToolCallId(model.id);
 			const functionResponsePart: Part = {
 				functionResponse: {
 					name: msg.toolName,
 					response: msg.isError ? { error: responseValue } : { output: responseValue },
-					...(hasImages && modelSupportsMultimodalFunctionResponse && { parts: imageParts }),
+					...((hasImages || hasDocuments) && modelSupportsMultimodalFunctionResponse && { parts: mediaParts }),
 					...(includeId ? { id: msg.toolCallId } : {}),
 				},
 			};
@@ -221,11 +258,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				});
 			}
 
-			// For Gemini < 3, add images in a separate user message
-			if (hasImages && !modelSupportsMultimodalFunctionResponse) {
+			// For Gemini < 3, add media in a separate user message
+			if ((hasImages || hasDocuments) && !modelSupportsMultimodalFunctionResponse) {
 				contents.push({
 					role: "user",
-					parts: [{ text: "Tool result image:" }, ...imageParts],
+					parts: [{ text: hasDocuments ? "Tool result file:" : "Tool result image:" }, ...mediaParts],
 				});
 			}
 		}

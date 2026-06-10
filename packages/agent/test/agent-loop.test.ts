@@ -307,6 +307,76 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("should append afterToolCall supplemental messages after visible tool results", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+		const supplemental = createUserMessage("supplemental tool context");
+		const convertedContexts: Message[][] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: (messages) => {
+				const converted = identityConverter(messages);
+				convertedContexts.push(converted);
+				return converted;
+			},
+			afterToolCall: async () => ({ newMessages: [supplemental] }),
+		};
+
+		let callIndex = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (callIndex === 0) {
+					const message = createAssistantMessage(
+						[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+						"toolUse",
+					);
+					stream.push({ type: "done", reason: "toolUse", message });
+				} else {
+					const message = createAssistantMessage([{ type: "text", text: "done" }]);
+					stream.push({ type: "done", reason: "stop", message });
+				}
+				callIndex++;
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo something")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user", "assistant"]);
+		expect(convertedContexts[1]?.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user"]);
+		const turnEnds = events.filter(
+			(event): event is Extract<AgentEvent, { type: "turn_end" }> => event.type === "turn_end",
+		);
+		expect(turnEnds[0]?.toolResults).toHaveLength(1);
+		const messageEndRoles = events
+			.filter((event): event is Extract<AgentEvent, { type: "message_end" }> => event.type === "message_end")
+			.map((event) => event.message.role);
+		expect(messageEndRoles.slice(0, 4)).toEqual(["user", "assistant", "toolResult", "user"]);
+	});
+
 	it("should execute mutated beforeToolCall args without revalidation", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: Array<string | number> = [];

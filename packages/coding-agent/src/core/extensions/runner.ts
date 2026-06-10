@@ -3,7 +3,7 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { AttachmentContent, ImageContent, Model } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
@@ -979,10 +979,11 @@ export class ExtensionRunner {
 
 	async emitBeforeAgentStart(
 		prompt: string,
-		images: ImageContent[] | undefined,
+		attachments: AttachmentContent[] | undefined,
 		systemPrompt: string,
 		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
+		const images = attachments?.filter((attachment): attachment is ImageContent => attachment.type === "image");
 		let currentSystemPrompt = systemPrompt;
 		const ctx = Object.defineProperties(
 			{},
@@ -1005,6 +1006,7 @@ export class ExtensionRunner {
 						type: "before_agent_start",
 						prompt,
 						images,
+						attachments,
 						systemPrompt: currentSystemPrompt,
 						systemPromptOptions,
 					};
@@ -1094,13 +1096,13 @@ export class ExtensionRunner {
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
 	async emitInput(
 		text: string,
-		images: ImageContent[] | undefined,
+		attachments: AttachmentContent[] | undefined,
 		source: InputSource,
 		streamingBehavior?: "steer" | "followUp",
 	): Promise<InputEventResult> {
 		const ctx = this.createContext();
 		let currentText = text;
-		let currentImages = images;
+		let currentAttachments = attachments;
 
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
@@ -1108,7 +1110,10 @@ export class ExtensionRunner {
 					const event: InputEvent = {
 						type: "input",
 						text: currentText,
-						images: currentImages,
+						images: currentAttachments?.filter(
+							(attachment): attachment is ImageContent => attachment.type === "image",
+						),
+						attachments: currentAttachments,
 						source,
 						streamingBehavior,
 					};
@@ -1116,7 +1121,7 @@ export class ExtensionRunner {
 					if (result?.action === "handled") return result;
 					if (result?.action === "transform") {
 						currentText = result.text;
-						currentImages = result.images ?? currentImages;
+						currentAttachments = result.attachments ?? result.images ?? currentAttachments;
 					}
 				} catch (err) {
 					this.emitError({
@@ -1128,8 +1133,8 @@ export class ExtensionRunner {
 				}
 			}
 		}
-		return currentText !== text || currentImages !== images
-			? { action: "transform", text: currentText, images: currentImages }
+		return currentText !== text || currentAttachments !== attachments
+			? { action: "transform", text: currentText, attachments: currentAttachments }
 			: { action: "continue" };
 	}
 }

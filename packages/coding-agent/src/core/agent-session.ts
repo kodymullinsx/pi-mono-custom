@@ -14,6 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { stat as fsStat } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import type {
 	Agent,
@@ -23,7 +24,15 @@ import type {
 	AgentTool,
 	ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
+import type {
+	AssistantMessage,
+	AttachmentContent,
+	ImageContent,
+	Message,
+	Model,
+	PromptContentBlock,
+	TextContent,
+} from "@earendil-works/pi-ai";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -91,6 +100,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { resolveReadPath } from "./tools/path-utils.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 
 // ============================================================================
@@ -199,7 +209,9 @@ export interface ExtensionBindings {
 export interface PromptOptions {
 	/** Whether to expand file-based prompt templates (default: true) */
 	expandPromptTemplates?: boolean;
-	/** Image attachments */
+	/** Attachments to include with the prompt */
+	attachments?: AttachmentContent[];
+	/** @deprecated use attachments */
 	images?: ImageContent[];
 	/** When streaming, how to queue the message: "steer" (interrupt) or "followUp" (wait). Required if streaming. */
 	streamingBehavior?: "steer" | "followUp";
@@ -248,6 +260,31 @@ interface ToolDefinitionEntry {
 
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+const FILE_UNCHANGED_TEXT = "File has not changed since the last read.";
+const TOOL_ATTACHMENT_CUSTOM_TYPE = "tool_attachment";
+
+type ReadFileStateEntry = {
+	mtimeMs: number;
+	offset?: number;
+	limit?: number;
+	regionKey?: string;
+	regionNormKey?: string;
+};
+
+type PdfReadStateEntry = {
+	mtimeMs: number;
+	firstPage: number;
+	lastPage: number;
+	rangeSize: number;
+	pageCount?: number;
+};
+
+type AttachmentRetryTarget = "document" | "image";
+type AttachmentRetrySource = "tool_attachment" | "user";
+type AttachmentRetryStripResult = {
+	source: AttachmentRetrySource;
+	strippedKinds: AttachmentRetryTarget[];
+};
 
 // ============================================================================
 // AgentSession Class
@@ -282,6 +319,9 @@ export class AgentSession {
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
+	private _readFileState = new Map<string, ReadFileStateEntry>();
+	private _pdfReadState = new Map<string, PdfReadStateEntry>();
+	private _pendingPdfWindowSizes = new Map<string, number>();
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
@@ -403,51 +443,380 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_call")) {
-				return undefined;
+			if (runner.hasHandlers("tool_call")) {
+				try {
+					const runnerResult = await runner.emitToolCall({
+						type: "tool_call",
+						toolName: toolCall.name,
+						toolCallId: toolCall.id,
+						input: args as Record<string, unknown>,
+					});
+					if (runnerResult?.block) {
+						return runnerResult;
+					}
+				} catch (err) {
+					if (err instanceof Error) {
+						throw err;
+					}
+					throw new Error(`Extension failed, blocking execution: ${String(err)}`);
+				}
 			}
 
-			try {
-				return await runner.emitToolCall({
-					type: "tool_call",
-					toolName: toolCall.name,
-					toolCallId: toolCall.id,
-					input: args as Record<string, unknown>,
-				});
-			} catch (err) {
-				if (err instanceof Error) {
-					throw err;
-				}
-				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
-			}
+			return this._normalizeReadToolArgs(toolCall.id, args);
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
 			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_result")) {
-				return undefined;
+			let nextContent = result.content;
+			let nextDetails = result.details;
+			let nextNewMessages = result.newMessages;
+			let nextIsError = isError;
+
+			if (runner.hasHandlers("tool_result")) {
+				const hookResult = await runner.emitToolResult({
+					type: "tool_result",
+					toolName: toolCall.name,
+					toolCallId: toolCall.id,
+					input: args as Record<string, unknown>,
+					content: nextContent,
+					details: nextDetails,
+					newMessages: nextNewMessages,
+					isError: nextIsError,
+				});
+
+				if (hookResult) {
+					nextContent = hookResult.content ?? nextContent;
+					nextDetails = hookResult.details ?? nextDetails;
+					nextNewMessages = hookResult.newMessages ?? nextNewMessages;
+					nextIsError = hookResult.isError ?? nextIsError;
+				}
 			}
 
-			const hookResult = await runner.emitToolResult({
-				type: "tool_result",
-				toolName: toolCall.name,
-				toolCallId: toolCall.id,
-				input: args as Record<string, unknown>,
-				content: result.content,
-				details: result.details,
-				isError,
-			});
-
-			if (!hookResult) {
-				return undefined;
-			}
-
-			return {
-				content: hookResult.content,
-				details: hookResult.details,
-				isError: hookResult.isError ?? isError,
-			};
+			return this._applyToolResultParity(
+				toolCall.name,
+				toolCall.id,
+				args,
+				nextContent,
+				nextDetails,
+				nextNewMessages,
+				nextIsError,
+			);
 		};
+	}
+
+	private async _applyToolResultParity(
+		toolName: string,
+		toolCallId: string,
+		args: unknown,
+		content: PromptContentBlock[],
+		details: unknown,
+		newMessages: AgentMessage[] | undefined,
+		isError: boolean,
+	): Promise<{
+		content: PromptContentBlock[];
+		details: unknown;
+		newMessages: AgentMessage[] | undefined;
+		isError: boolean;
+	}> {
+		if (toolName !== "read") {
+			return { content, details, newMessages, isError };
+		}
+
+		if (isError) {
+			this._pendingPdfWindowSizes.delete(toolCallId);
+			return { content, details, newMessages, isError };
+		}
+
+		const { textBlocks, attachmentBlocks } = this._splitAttachmentBlocks(content);
+		await this._updatePdfReadState(toolCallId, args, details);
+		if (attachmentBlocks.length > 0) {
+			return {
+				content:
+					textBlocks.length > 0
+						? textBlocks
+						: [{ type: "text", text: "Read attachment prepared for model inspection." }],
+				details,
+				newMessages: [...(newMessages ?? []), this._buildToolAttachmentMessage(toolCallId, attachmentBlocks)],
+				isError,
+			};
+		}
+
+		const fileUnchangedContent = await this._applyReadFileState(args);
+		return {
+			content: fileUnchangedContent ?? content,
+			details,
+			newMessages,
+			isError,
+		};
+	}
+
+	private _splitAttachmentBlocks(content: PromptContentBlock[]): {
+		textBlocks: PromptContentBlock[];
+		attachmentBlocks: AttachmentContent[];
+	} {
+		const textBlocks: PromptContentBlock[] = [];
+		const attachmentBlocks: AttachmentContent[] = [];
+
+		for (const block of content) {
+			if (block.type === "image" || block.type === "document") {
+				attachmentBlocks.push(block);
+			} else {
+				textBlocks.push(block);
+			}
+		}
+
+		return { textBlocks, attachmentBlocks };
+	}
+
+	private _buildToolAttachmentMessage(toolCallId: string, content: AttachmentContent[]): CustomMessage {
+		return {
+			role: "custom",
+			customType: TOOL_ATTACHMENT_CUSTOM_TYPE,
+			content,
+			display: false,
+			details: {
+				toolName: "read",
+				toolCallId,
+			},
+			timestamp: Date.now(),
+		};
+	}
+
+	private async _applyReadFileState(args: unknown): Promise<PromptContentBlock[] | undefined> {
+		const request = this._extractReadRequest(args);
+		if (!request.absolutePath || request.pages) {
+			return undefined;
+		}
+
+		try {
+			const stats = await fsStat(request.absolutePath);
+			const nextState: ReadFileStateEntry = {
+				mtimeMs: stats.mtimeMs,
+				offset: request.offset,
+				limit: request.limit,
+				regionKey: request.region
+					? `${request.region.left},${request.region.top},${request.region.width},${request.region.height}`
+					: undefined,
+				regionNormKey: request.regionNorm
+					? `${request.regionNorm.left},${request.regionNorm.top},${request.regionNorm.width},${request.regionNorm.height}`
+					: undefined,
+			};
+			const previousState = this._readFileState.get(request.absolutePath);
+			this._readFileState.set(request.absolutePath, nextState);
+
+			if (
+				previousState &&
+				previousState.mtimeMs === nextState.mtimeMs &&
+				previousState.offset === nextState.offset &&
+				previousState.limit === nextState.limit &&
+				previousState.regionKey === nextState.regionKey &&
+				previousState.regionNormKey === nextState.regionNormKey
+			) {
+				return [{ type: "text", text: FILE_UNCHANGED_TEXT }];
+			}
+		} catch {
+			return undefined;
+		}
+
+		return undefined;
+	}
+
+	private _extractReadRequest(args: unknown): {
+		absolutePath?: string;
+		offset?: number;
+		limit?: number;
+		pages?: string;
+		region?: { left: number; top: number; width: number; height: number };
+		regionNorm?: { left: number; top: number; width: number; height: number };
+	} {
+		if (!args || typeof args !== "object") {
+			return {};
+		}
+
+		const input = args as {
+			path?: unknown;
+			file_path?: unknown;
+			offset?: unknown;
+			limit?: unknown;
+			pages?: unknown;
+			region?: unknown;
+			regionNorm?: unknown;
+		};
+		const rawPath =
+			typeof input.path === "string"
+				? input.path
+				: typeof input.file_path === "string"
+					? input.file_path
+					: undefined;
+		if (!rawPath) {
+			return {};
+		}
+
+		return {
+			absolutePath: resolveReadPath(rawPath, this._cwd),
+			offset: typeof input.offset === "number" ? input.offset : undefined,
+			limit: typeof input.limit === "number" ? input.limit : undefined,
+			pages: typeof input.pages === "string" ? input.pages : undefined,
+			region: this._readRegionFromUnknown(input.region),
+			regionNorm: this._readRegionFromUnknown(input.regionNorm),
+		};
+	}
+
+	private _readRegionFromUnknown(
+		value: unknown,
+	): { left: number; top: number; width: number; height: number } | undefined {
+		if (
+			typeof value === "object" &&
+			value !== null &&
+			typeof (value as { left?: unknown }).left === "number" &&
+			typeof (value as { top?: unknown }).top === "number" &&
+			typeof (value as { width?: unknown }).width === "number" &&
+			typeof (value as { height?: unknown }).height === "number"
+		) {
+			return {
+				left: (value as { left: number }).left,
+				top: (value as { top: number }).top,
+				width: (value as { width: number }).width,
+				height: (value as { height: number }).height,
+			};
+		}
+		return undefined;
+	}
+
+	private _formatPdfPageRange(firstPage: number, lastPage: number): string {
+		return firstPage === lastPage ? `${firstPage}` : `${firstPage}-${lastPage}`;
+	}
+
+	private _getExplicitPdfRangeSize(pages: string | undefined): number | undefined {
+		if (!pages || !/^\d+(?:-\d+)?$/.test(pages.trim())) {
+			return undefined;
+		}
+
+		const [first, last] = pages
+			.trim()
+			.split("-")
+			.map((value) => Number.parseInt(value, 10));
+		if (!Number.isFinite(first)) {
+			return undefined;
+		}
+		return Number.isFinite(last) ? Math.max(1, last - first + 1) : 1;
+	}
+
+	private async _normalizeReadToolArgs(
+		toolCallId: string,
+		args: unknown,
+	): Promise<{ block?: boolean; reason?: string } | undefined> {
+		const request = this._extractReadRequest(args);
+		if (!request.absolutePath || !request.pages || typeof args !== "object" || args === null) {
+			return undefined;
+		}
+
+		const normalizedAlias = request.pages.trim().toLowerCase();
+		if (normalizedAlias !== "next" && normalizedAlias !== "prev") {
+			return undefined;
+		}
+
+		const previousState = this._pdfReadState.get(request.absolutePath);
+		if (!previousState) {
+			return {
+				block: true,
+				reason:
+					'No prior PDF range is available for pages="next"/"prev". Start with read(path) or an explicit pages="N-M" range first.',
+			};
+		}
+
+		try {
+			const stats = await fsStat(request.absolutePath);
+			if (stats.mtimeMs !== previousState.mtimeMs) {
+				this._pdfReadState.delete(request.absolutePath);
+				return {
+					block: true,
+					reason:
+						'The PDF changed since the last paged read. Start again with read(path) or an explicit pages="N-M" range before using pages="next"/"prev".',
+				};
+			}
+		} catch (error) {
+			this._pdfReadState.delete(request.absolutePath);
+			const message = error instanceof Error ? error.message : String(error);
+			return {
+				block: true,
+				reason: `Could not revalidate the prior PDF range for pages="next"/"prev": ${message}. Start again with read(path) or an explicit pages="N-M" range.`,
+			};
+		}
+
+		let firstPage: number;
+		let lastPage: number;
+		if (normalizedAlias === "next") {
+			firstPage = previousState.lastPage + 1;
+			if (previousState.pageCount !== undefined && firstPage > previousState.pageCount) {
+				return {
+					block: true,
+					reason: `Already at the end of the PDF. Last available range is ${this._formatPdfPageRange(previousState.firstPage, previousState.lastPage)}.`,
+				};
+			}
+			lastPage =
+				previousState.pageCount !== undefined
+					? Math.min(previousState.pageCount, firstPage + previousState.rangeSize - 1)
+					: firstPage + previousState.rangeSize - 1;
+		} else {
+			lastPage = previousState.firstPage - 1;
+			if (lastPage < 1) {
+				return {
+					block: true,
+					reason: `Already at the beginning of the PDF. Earliest available range is ${this._formatPdfPageRange(previousState.firstPage, previousState.lastPage)}.`,
+				};
+			}
+			firstPage = Math.max(1, lastPage - previousState.rangeSize + 1);
+		}
+
+		this._pendingPdfWindowSizes.set(toolCallId, previousState.rangeSize);
+		(args as { pages?: unknown }).pages = this._formatPdfPageRange(firstPage, lastPage);
+		return undefined;
+	}
+
+	private async _updatePdfReadState(toolCallId: string, args: unknown, details: unknown): Promise<void> {
+		const pendingWindowSize = this._pendingPdfWindowSizes.get(toolCallId);
+		this._pendingPdfWindowSizes.delete(toolCallId);
+		const request = this._extractReadRequest(args);
+		if (!request.absolutePath) {
+			return;
+		}
+
+		const pdfDetails =
+			typeof details === "object" &&
+			details !== null &&
+			"pdf" in details &&
+			typeof (details as { pdf?: unknown }).pdf === "object" &&
+			(details as { pdf?: unknown }).pdf !== null
+				? (
+						details as {
+							pdf: { firstPage?: unknown; lastPage?: unknown; rangeSize?: unknown; pageCount?: unknown };
+						}
+					).pdf
+				: undefined;
+		if (
+			!pdfDetails ||
+			typeof pdfDetails.firstPage !== "number" ||
+			typeof pdfDetails.lastPage !== "number" ||
+			typeof pdfDetails.rangeSize !== "number"
+		) {
+			return;
+		}
+
+		const explicitRangeSize = this._getExplicitPdfRangeSize(request.pages);
+
+		try {
+			const stats = await fsStat(request.absolutePath);
+			this._pdfReadState.set(request.absolutePath, {
+				mtimeMs: stats.mtimeMs,
+				firstPage: pdfDetails.firstPage,
+				lastPage: pdfDetails.lastPage,
+				rangeSize: pendingWindowSize ?? explicitRangeSize ?? pdfDetails.rangeSize,
+				pageCount: typeof pdfDetails.pageCount === "number" ? pdfDetails.pageCount : undefined,
+			});
+		} catch {
+			return;
+		}
 	}
 
 	// =========================================================================
@@ -555,7 +924,10 @@ export class AgentSession {
 		for (let i = event.messages.length - 1; i >= 0; i--) {
 			const message = event.messages[i];
 			if (message.role === "assistant") {
-				return this._isRetryableError(message as AssistantMessage);
+				const assistantMessage = message as AssistantMessage;
+				return (
+					this._getAttachmentRetryTargets(assistantMessage).size > 0 || this._isRetryableError(assistantMessage)
+				);
 			}
 		}
 		return false;
@@ -951,6 +1323,10 @@ export class AgentSession {
 			return false;
 		}
 
+		if (await this._handleAttachmentStripRetry(msg)) {
+			return true;
+		}
+
 		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
 			return true;
 		}
@@ -1002,11 +1378,11 @@ export class AgentSession {
 
 			// Emit input event for extension interception (before skill/template expansion)
 			let currentText = text;
-			let currentImages = options?.images;
+			let currentAttachments = options?.attachments ?? options?.images;
 			if (this._extensionRunner.hasHandlers("input")) {
 				const inputResult = await this._extensionRunner.emitInput(
 					currentText,
-					currentImages,
+					currentAttachments,
 					options?.source ?? "interactive",
 					this.isStreaming ? options?.streamingBehavior : undefined,
 				);
@@ -1016,7 +1392,7 @@ export class AgentSession {
 				}
 				if (inputResult.action === "transform") {
 					currentText = inputResult.text;
-					currentImages = inputResult.images ?? currentImages;
+					currentAttachments = inputResult.attachments ?? inputResult.images ?? currentAttachments;
 				}
 			}
 
@@ -1035,9 +1411,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentAttachments);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentAttachments);
 				}
 				preflightResult?.(true);
 				return;
@@ -1080,9 +1456,9 @@ export class AgentSession {
 			messages = [];
 
 			// Add user message
-			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-			if (currentImages) {
-				userContent.push(...currentImages);
+			const userContent: PromptContentBlock[] = [{ type: "text", text: expandedText }];
+			if (currentAttachments) {
+				userContent.push(...currentAttachments);
 			}
 			messages.push({
 				role: "user",
@@ -1099,7 +1475,7 @@ export class AgentSession {
 			// Emit before_agent_start extension event
 			const result = await this._extensionRunner.emitBeforeAgentStart(
 				expandedText,
-				currentImages,
+				currentAttachments,
 				this._baseSystemPrompt,
 				this._baseSystemPromptOptions,
 			);
@@ -1201,10 +1577,10 @@ export class AgentSession {
 	 * Delivered after the current assistant turn finishes executing its tool calls,
 	 * before the next LLM call.
 	 * Expands skill commands and prompt templates. Errors on extension commands.
-	 * @param images Optional image attachments to include with the message
+	 * @param attachments Optional attachments to include with the message
 	 * @throws Error if text is an extension command
 	 */
-	async steer(text: string, images?: ImageContent[]): Promise<void> {
+	async steer(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		// Check for extension commands (cannot be queued)
 		if (text.startsWith("/")) {
 			this._throwIfExtensionCommand(text);
@@ -1214,17 +1590,17 @@ export class AgentSession {
 		let expandedText = this._expandSkillCommand(text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-		await this._queueSteer(expandedText, images);
+		await this._queueSteer(expandedText, attachments);
 	}
 
 	/**
 	 * Queue a follow-up message to be processed after the agent finishes.
 	 * Delivered only when agent has no more tool calls or steering messages.
 	 * Expands skill commands and prompt templates. Errors on extension commands.
-	 * @param images Optional image attachments to include with the message
+	 * @param attachments Optional attachments to include with the message
 	 * @throws Error if text is an extension command
 	 */
-	async followUp(text: string, images?: ImageContent[]): Promise<void> {
+	async followUp(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		// Check for extension commands (cannot be queued)
 		if (text.startsWith("/")) {
 			this._throwIfExtensionCommand(text);
@@ -1234,18 +1610,18 @@ export class AgentSession {
 		let expandedText = this._expandSkillCommand(text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-		await this._queueFollowUp(expandedText, images);
+		await this._queueFollowUp(expandedText, attachments);
 	}
 
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueSteer(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images) {
-			content.push(...images);
+		const content: PromptContentBlock[] = [{ type: "text", text }];
+		if (attachments) {
+			content.push(...attachments);
 		}
 		this.agent.steer({
 			role: "user",
@@ -1257,12 +1633,12 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(text: string, attachments?: AttachmentContent[]): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images) {
-			content.push(...images);
+		const content: PromptContentBlock[] = [{ type: "text", text }];
+		if (attachments) {
+			content.push(...attachments);
 		}
 		this.agent.followUp({
 			role: "user",
@@ -1341,34 +1717,34 @@ export class AgentSession {
 	 * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
 	 */
 	async sendUserMessage(
-		content: string | (TextContent | ImageContent)[],
+		content: string | PromptContentBlock[],
 		options?: { deliverAs?: "steer" | "followUp" },
 	): Promise<void> {
-		// Normalize content to text string + optional images
+		// Normalize content to text string + optional attachments
 		let text: string;
-		let images: ImageContent[] | undefined;
+		let attachments: AttachmentContent[] | undefined;
 
 		if (typeof content === "string") {
 			text = content;
 		} else {
 			const textParts: string[] = [];
-			images = [];
+			attachments = [];
 			for (const part of content) {
 				if (part.type === "text") {
 					textParts.push(part.text);
 				} else {
-					images.push(part);
+					attachments.push(part);
 				}
 			}
 			text = textParts.join("\n");
-			if (images.length === 0) images = undefined;
+			if (attachments.length === 0) attachments = undefined;
 		}
 
 		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
 		await this.prompt(text, {
 			expandPromptTemplates: false,
 			streamingBehavior: options?.deliverAs,
-			images,
+			attachments,
 			source: "extension",
 		});
 	}
@@ -2483,6 +2859,156 @@ export class AgentSession {
 		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
 			err,
 		);
+	}
+
+	private _getAttachmentRetryTargets(message: AssistantMessage | undefined): Set<AttachmentRetryTarget> {
+		const targets = new Set<AttachmentRetryTarget>();
+		const retryTargets = message?.errorMetadata?.local ? message.errorMetadata.attachmentRetryTargets : undefined;
+		if (!retryTargets) {
+			return targets;
+		}
+
+		for (const target of retryTargets) {
+			if (target === "document" || target === "image") {
+				targets.add(target);
+			}
+		}
+		return targets;
+	}
+
+	private _matchesAttachmentRetryTarget(block: PromptContentBlock, targets: Set<AttachmentRetryTarget>): boolean {
+		return (block.type === "document" && targets.has("document")) || (block.type === "image" && targets.has("image"));
+	}
+
+	private _describeAttachmentRetryKinds(kinds: AttachmentRetryTarget[]): string {
+		const uniqueKinds = Array.from(new Set(kinds));
+		if (uniqueKinds.length === 2) {
+			return "document and image attachments";
+		}
+		return uniqueKinds[0] === "document" ? "document attachments" : "image attachments";
+	}
+
+	private _buildAttachmentRetryPlaceholder(
+		strippedKinds: AttachmentRetryTarget[],
+		source: AttachmentRetrySource,
+	): PromptContentBlock[] {
+		const prefix = source === "tool_attachment" ? "Tool attachment" : "Attachment";
+		return [
+			{
+				type: "text",
+				text: `[${prefix} removed after the model rejected ${this._describeAttachmentRetryKinds(strippedKinds)}.]`,
+			},
+		];
+	}
+
+	private _stripAttachmentMessageAtIndex(
+		index: number,
+		targets: Set<AttachmentRetryTarget>,
+		source: AttachmentRetrySource,
+	): AttachmentRetryStripResult | undefined {
+		const message = this.agent.state.messages[index];
+		if (!message || (message.role !== "custom" && message.role !== "user") || typeof message.content === "string") {
+			return undefined;
+		}
+
+		const strippedKinds: AttachmentRetryTarget[] = Array.from(
+			new Set(
+				message.content
+					.filter((block): block is AttachmentContent => this._matchesAttachmentRetryTarget(block, targets))
+					.map((block) => block.type),
+			),
+		);
+		if (strippedKinds.length === 0) {
+			return undefined;
+		}
+
+		const nextContent = message.content.filter((block) => !this._matchesAttachmentRetryTarget(block, targets));
+		const nextMessages = [...this.agent.state.messages];
+		nextMessages[index] =
+			nextContent.length === 0
+				? {
+						...message,
+						content: this._buildAttachmentRetryPlaceholder(strippedKinds, source),
+					}
+				: {
+						...message,
+						content: nextContent,
+					};
+		this.agent.state.messages = nextMessages;
+		return { source, strippedKinds };
+	}
+
+	private _stripLatestAttachmentMessage(targets: Set<AttachmentRetryTarget>): AttachmentRetryStripResult | undefined {
+		if (targets.size === 0) {
+			return undefined;
+		}
+
+		const messages = this.agent.state.messages;
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index];
+			if (
+				message.role === "custom" &&
+				message.customType === TOOL_ATTACHMENT_CUSTOM_TYPE &&
+				typeof message.content !== "string"
+			) {
+				const result = this._stripAttachmentMessageAtIndex(index, targets, "tool_attachment");
+				if (result) {
+					return result;
+				}
+			}
+		}
+
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const message = messages[index];
+			if (message.role !== "user" || typeof message.content === "string") {
+				continue;
+			}
+			const result = this._stripAttachmentMessageAtIndex(index, targets, "user");
+			if (result) {
+				return result;
+			}
+		}
+
+		return undefined;
+	}
+
+	private async _handleAttachmentStripRetry(message: AssistantMessage): Promise<boolean> {
+		const settings = this.settingsManager.getRetrySettings();
+		if (!settings.enabled) {
+			return false;
+		}
+
+		const targets = this._getAttachmentRetryTargets(message);
+		if (targets.size === 0) {
+			return false;
+		}
+
+		this._retryAttempt++;
+		if (this._retryAttempt > settings.maxRetries) {
+			this._retryAttempt--;
+			return false;
+		}
+
+		const stripResult = this._stripLatestAttachmentMessage(targets);
+		if (!stripResult) {
+			this._retryAttempt--;
+			return false;
+		}
+
+		const messages = this.agent.state.messages;
+		if (messages.length > 0 && messages[messages.length - 1]?.role === "assistant") {
+			this.agent.state.messages = messages.slice(0, -1);
+		}
+
+		this._emit({
+			type: "auto_retry_start",
+			attempt: this._retryAttempt,
+			maxAttempts: settings.maxRetries,
+			delayMs: 0,
+			errorMessage: `${message.errorMessage || "Attachment rejected by model"} [auto-retry removed ${this._describeAttachmentRetryKinds(stripResult.strippedKinds)} from the latest ${stripResult.source === "tool_attachment" ? "tool attachment message" : "user attachment message"}]`,
+		});
+
+		return true;
 	}
 
 	/**

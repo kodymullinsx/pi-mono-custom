@@ -1,0 +1,3 @@
+references:
+  - path: domain-schema.md
+    description: Schema reference for memory.md frontmatter, required sections, _index.md format, directory layout, and reference file types.

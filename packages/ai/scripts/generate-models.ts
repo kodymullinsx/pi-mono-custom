@@ -368,6 +368,22 @@ function getBedrockBaseUrl(modelId: string): string {
 		: "https://bedrock-runtime.us-east-1.amazonaws.com";
 }
 
+const APIS_WITH_DOCUMENT_SUPPORT = new Set<Api>([
+	"anthropic-messages",
+	"bedrock-converse-stream",
+	"google-generative-ai",
+	"google-vertex",
+]);
+
+type ModelInputModality = "text" | "image" | "document";
+
+function buildInputModalities(api: Api, rawInput: string[] | undefined): ModelInputModality[] {
+	const input: ModelInputModality[] = ["text"];
+	if (rawInput?.includes("image")) input.push("image");
+	if (rawInput?.includes("pdf") && APIS_WITH_DOCUMENT_SUPPORT.has(api)) input.push("document");
+	return input;
+}
+
 function normalizeNvidiaModelId(modelId: string): string {
 	return modelId.toLowerCase().replaceAll("_", ".");
 }
@@ -542,7 +558,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "amazon-bedrock" as const,
 					baseUrl: getBedrockBaseUrl(id),
 					reasoning: m.reasoning === true,
-					input: (m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"]) as ("text" | "image")[],
+					input: buildInputModalities("bedrock-converse-stream", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -568,7 +584,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "anthropic",
 					baseUrl: "https://api.anthropic.com",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("anthropic-messages", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,
@@ -594,7 +610,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					provider: "google",
 					baseUrl: "https://generativelanguage.googleapis.com/v1beta",
 					reasoning: m.reasoning === true,
-					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					input: buildInputModalities("google-generative-ai", m.modalities?.input),
 					cost: {
 						input: m.cost?.input || 0,
 						output: m.cost?.output || 0,

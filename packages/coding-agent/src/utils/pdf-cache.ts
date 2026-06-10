@@ -1,0 +1,112 @@
+import { createHash } from "node:crypto";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { getAgentDir } from "../config.ts";
+
+let pdfCacheRootReady = false;
+let activeCleanup: Promise<void> | undefined;
+let lastCleanupMs = 0;
+
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+function getPDFCacheRoot(): string {
+	return join(getAgentDir(), "cache", "pdf");
+}
+
+function buildPDFCacheKey(
+	filePath: string,
+	mtimeMs: number,
+	options?: { firstPage?: number; lastPage?: number },
+): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				filePath,
+				fileName: basename(filePath),
+				mtimeMs,
+				firstPage: options?.firstPage ?? null,
+				lastPage: options?.lastPage ?? null,
+			}),
+		)
+		.digest("hex");
+}
+
+function pruneStaleEntries(root: string): Promise<void> {
+	const now = Date.now();
+	if (now - lastCleanupMs < CLEANUP_INTERVAL_MS) return Promise.resolve();
+	if (activeCleanup) return activeCleanup;
+
+	lastCleanupMs = now;
+	activeCleanup = (async () => {
+		try {
+			const entries = await readdir(root);
+			await Promise.all(
+				entries.map(async (entry) => {
+					const entryPath = join(root, entry);
+					try {
+						const stats = await stat(entryPath);
+						if (stats.isDirectory() && now - stats.mtimeMs > CACHE_TTL_MS) {
+							await rm(entryPath, { recursive: true, force: true });
+						}
+					} catch {
+						// Entry vanished or is unreadable.
+					}
+				}),
+			);
+		} catch {
+			// Cache root is unreadable.
+		} finally {
+			activeCleanup = undefined;
+		}
+	})();
+	return activeCleanup;
+}
+
+function getPDFPageImageNumber(entry: string): number | undefined {
+	const match = /-(\d+)\.jpg$/i.exec(entry);
+	if (!match) return undefined;
+	const parsed = Number.parseInt(match[1], 10);
+	return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+export function sortPDFPageImageEntries(entries: string[]): string[] {
+	return [...entries].sort((a, b) => {
+		const pageA = getPDFPageImageNumber(a);
+		const pageB = getPDFPageImageNumber(b);
+		if (pageA !== undefined && pageB !== undefined && pageA !== pageB) {
+			return pageA - pageB;
+		}
+		if (pageA !== undefined && pageB === undefined) {
+			return -1;
+		}
+		if (pageA === undefined && pageB !== undefined) {
+			return 1;
+		}
+		return a.localeCompare(b);
+	});
+}
+
+export async function getPDFCacheEntry(
+	filePath: string,
+	mtimeMs: number,
+	options?: { firstPage?: number; lastPage?: number },
+): Promise<{ outputDir: string; imagePaths: string[] }> {
+	const root = getPDFCacheRoot();
+	if (!pdfCacheRootReady) {
+		await mkdir(root, { recursive: true });
+		pdfCacheRootReady = true;
+	}
+
+	pruneStaleEntries(root).catch(() => undefined);
+
+	const outputDir = join(root, buildPDFCacheKey(filePath, mtimeMs, options));
+	await mkdir(outputDir, { recursive: true });
+
+	const entries = await readdir(outputDir);
+	const imagePaths = sortPDFPageImageEntries(entries.filter((entry) => entry.endsWith(".jpg"))).map((entry) =>
+		join(outputDir, entry),
+	);
+
+	return { outputDir, imagePaths };
+}

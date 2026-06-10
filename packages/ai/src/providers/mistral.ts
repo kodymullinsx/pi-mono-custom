@@ -21,6 +21,11 @@ import type {
 	Tool,
 	ToolCall,
 } from "../types.ts";
+import {
+	getAssistantErrorMetadata,
+	sanitizeAttachmentMimeType,
+	throwUnsupportedDocumentSerialization,
+} from "../utils/document-utils.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
@@ -96,6 +101,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			output.errorMetadata = getAssistantErrorMetadata(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -490,10 +496,14 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 			}
 			const hadImages = msg.content.some((item) => item.type === "image");
 			const content: ContentChunk[] = msg.content
-				.filter((item) => item.type === "text" || supportsImages)
+				.filter((item) => item.type === "text" || supportsImages || item.type === "document")
 				.map((item) => {
 					if (item.type === "text") return { type: "text", text: sanitizeSurrogates(item.text) };
-					return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
+					if (item.type === "document") return throwUnsupportedDocumentSerialization(item, "user messages");
+					return {
+						type: "image_url",
+						imageUrl: `data:${sanitizeAttachmentMimeType(item.mimeType)};base64,${item.data}`,
+					};
 				});
 			if (content.length > 0) {
 				result.push({ role: "user", content });
@@ -540,6 +550,10 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 		}
 
 		const toolContent: ContentChunk[] = [];
+		const documentBlock = msg.content.find((part) => part.type === "document");
+		if (documentBlock) {
+			throwUnsupportedDocumentSerialization(documentBlock, "tool results");
+		}
 		const textResult = msg.content
 			.filter((part) => part.type === "text")
 			.map((part) => (part.type === "text" ? sanitizeSurrogates(part.text) : ""))
@@ -552,7 +566,7 @@ function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompl
 			if (part.type !== "image") continue;
 			toolContent.push({
 				type: "image_url",
-				imageUrl: `data:${part.mimeType};base64,${part.data}`,
+				imageUrl: `data:${sanitizeAttachmentMimeType(part.mimeType)};base64,${part.data}`,
 			});
 		}
 		result.push({

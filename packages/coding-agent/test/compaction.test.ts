@@ -142,13 +142,13 @@ function extractText(messages: AgentMessage[]): string {
 					return typeof message.content === "string"
 						? message.content
 						: message.content
-								.filter((block): block is { type: "text"; text: string } => block.type === "text")
-								.map((block) => block.text)
+								.map((block) => (block.type === "text" ? block.text : ""))
+								.filter(Boolean)
 								.join(" ");
 				case "assistant":
 					return message.content
-						.filter((block): block is { type: "text"; text: string } => block.type === "text")
-						.map((block) => block.text)
+						.map((block) => (block.type === "text" ? block.text : ""))
+						.filter(Boolean)
 						.join(" ");
 				case "branchSummary":
 				case "compactionSummary":
@@ -158,8 +158,8 @@ function extractText(messages: AgentMessage[]): string {
 					return typeof message.content === "string"
 						? message.content
 						: message.content
-								.filter((block): block is { type: "text"; text: string } => block.type === "text")
-								.map((block) => block.text)
+								.map((block) => (block.type === "text" ? block.text : ""))
+								.filter(Boolean)
 								.join(" ");
 				case "bashExecution":
 					return `${message.command}\n${message.output}`;

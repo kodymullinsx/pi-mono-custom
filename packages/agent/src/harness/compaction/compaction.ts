@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, PromptContentBlock, Usage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
@@ -64,7 +64,7 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
 	if (entry.type === "custom_message") {
 		return createCustomMessage(
 			entry.customType,
-			entry.content as string | (TextContent | ImageContent)[],
+			entry.content as string | PromptContentBlock[],
 			entry.display,
 			entry.details,
 			entry.timestamp,

@@ -1,6 +1,6 @@
 import {
 	type AssistantMessage,
-	type ImageContent,
+	type AttachmentContent,
 	type Model,
 	streamSimple,
 	type UserMessage,
@@ -28,6 +28,7 @@ import type {
 	AgentHarnessOptions,
 	AgentHarnessOwnEvent,
 	AgentHarnessPhase,
+	AgentHarnessPromptOptions,
 	AgentHarnessResources,
 	AgentHarnessStreamOptions,
 	AgentHarnessStreamOptionsPatch,
@@ -40,9 +41,13 @@ import type {
 } from "./types.ts";
 import { AgentHarnessError, BranchSummaryError, CompactionError, SessionError, toError } from "./types.ts";
 
-function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
-	const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text }];
-	if (images) content.push(...images);
+function resolvePromptAttachments(options?: AgentHarnessPromptOptions): AttachmentContent[] | undefined {
+	return options?.attachments ?? options?.images;
+}
+
+function createUserMessage(text: string, attachments?: AttachmentContent[]): UserMessage {
+	const content: Array<{ type: "text"; text: string } | AttachmentContent> = [{ type: "text", text }];
+	if (attachments) content.push(...attachments);
 	return { role: "user", content, timestamp: Date.now() };
 }
 
@@ -553,10 +558,11 @@ export class AgentHarness<
 	private async executeTurn(
 		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
 		text: string,
-		options?: { images?: ImageContent[] },
+		options?: AgentHarnessPromptOptions,
 	): Promise<AssistantMessage> {
 		let activeTurnState = turnState;
-		let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
+		const attachments = resolvePromptAttachments(options);
+		let messages: AgentMessage[] = [createUserMessage(text, attachments)];
 		if (this.nextTurnQueue.length > 0) {
 			const queuedMessages = this.nextTurnQueue.splice(0);
 			try {
@@ -571,6 +577,7 @@ export class AgentHarness<
 			type: "before_agent_start",
 			prompt: text,
 			images: options?.images,
+			attachments,
 			systemPrompt: turnState.systemPrompt,
 			resources: turnState.resources,
 		});
@@ -627,7 +634,7 @@ export class AgentHarness<
 		}
 	}
 
-	async prompt(text: string, options?: { images?: ImageContent[] }): Promise<AssistantMessage> {
+	async prompt(text: string, options?: AgentHarnessPromptOptions): Promise<AssistantMessage> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
@@ -676,20 +683,20 @@ export class AgentHarness<
 		}
 	}
 
-	async steer(text: string, options?: { images?: ImageContent[] }): Promise<void> {
+	async steer(text: string, options?: AgentHarnessPromptOptions): Promise<void> {
 		if (this.phase === "idle") throw new AgentHarnessError("invalid_state", "Cannot steer while idle");
-		this.steerQueue.push(createUserMessage(text, options?.images));
+		this.steerQueue.push(createUserMessage(text, resolvePromptAttachments(options)));
 		await this.emitQueueUpdate();
 	}
 
-	async followUp(text: string, options?: { images?: ImageContent[] }): Promise<void> {
+	async followUp(text: string, options?: AgentHarnessPromptOptions): Promise<void> {
 		if (this.phase === "idle") throw new AgentHarnessError("invalid_state", "Cannot follow up while idle");
-		this.followUpQueue.push(createUserMessage(text, options?.images));
+		this.followUpQueue.push(createUserMessage(text, resolvePromptAttachments(options)));
 		await this.emitQueueUpdate();
 	}
 
-	async nextTurn(text: string, options?: { images?: ImageContent[] }): Promise<void> {
-		this.nextTurnQueue.push(createUserMessage(text, options?.images));
+	async nextTurn(text: string, options?: AgentHarnessPromptOptions): Promise<void> {
+		this.nextTurnQueue.push(createUserMessage(text, resolvePromptAttachments(options)));
 		await this.emitQueueUpdate();
 	}
 

@@ -1,7 +1,14 @@
 import { Worker } from "node:worker_threads";
-import { type ImageResizeOptions, type ResizedImage, resizeImageInProcess } from "./image-resize-core.ts";
+import {
+	clipImageCropRegion,
+	getImageDimensions,
+	type ImageResizeOptions,
+	type ResizedImage,
+	resizeImageInProcess,
+} from "./image-resize-core.ts";
 
-export type { ImageResizeOptions, ResizedImage } from "./image-resize-core.ts";
+export type { ImageCropRegion, ImageResizeOptions, ResizedImage } from "./image-resize-core.ts";
+export { clipImageCropRegion, getImageDimensions };
 
 interface ResizeImageWorkerResponse {
 	result?: ResizedImage | null;
@@ -113,9 +120,23 @@ export async function resizeImage(
  * Format a dimension note for resized images.
  * This helps the model understand the coordinate mapping.
  */
-export function formatDimensionNote(result: ResizedImage): string | undefined {
-	if (!result.wasResized) {
+export function formatDimensionNote(
+	result: ResizedImage,
+	options?: {
+		includeOriginalDimensions?: boolean;
+	},
+): string | undefined {
+	if (result.crop) {
+		const scale = result.crop.width / result.width;
+		return `[Image crop from original ${result.originalWidth}x${result.originalHeight}: left=${result.crop.left}, top=${result.crop.top}, width=${result.crop.width}, height=${result.crop.height}. Displayed at ${result.width}x${result.height}. Multiply displayed coordinates by ${scale.toFixed(2)} and offset by (${result.crop.left}, ${result.crop.top}) to map to the original image.]`;
+	}
+
+	if (!result.wasResized && !options?.includeOriginalDimensions) {
 		return undefined;
+	}
+
+	if (!result.wasResized) {
+		return `[Image dimensions: ${result.originalWidth}x${result.originalHeight}. Coordinates map directly to the original image.]`;
 	}
 
 	const scale = result.originalWidth / result.width;

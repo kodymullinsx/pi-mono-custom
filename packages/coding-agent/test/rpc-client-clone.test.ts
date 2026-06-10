@@ -27,3 +27,25 @@ describe("RpcClient clone", () => {
 		expect(result).toEqual({ cancelled: false });
 	});
 });
+
+describe("RpcClient attachments", () => {
+	it("sends prompt attachments on the first-class attachment field", async () => {
+		const client = new RpcClient();
+		const privateClient = client as unknown as RpcClientPrivate;
+		const send = vi.fn(async () => ({ type: "response", command: "prompt", success: true }));
+		privateClient.send = send;
+
+		const attachments = [
+			{
+				type: "document" as const,
+				data: "JVBERi0xLjQK",
+				mimeType: "application/pdf",
+				name: "sample.pdf",
+			},
+		];
+
+		await client.prompt("read this", attachments);
+
+		expect(send).toHaveBeenCalledWith({ type: "prompt", message: "read this", attachments });
+	});
+});

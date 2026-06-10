@@ -6,7 +6,7 @@
  */
 
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
+import { type Api, type AttachmentContent, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
@@ -119,22 +119,31 @@ function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
 async function prepareInitialMessage(
 	parsed: Args,
 	autoResizeImages: boolean,
+	model?: Model<Api>,
 	stdinContent?: string,
 ): Promise<{
 	initialMessage?: string;
-	initialImages?: ImageContent[];
+	initialAttachments?: AttachmentContent[];
 }> {
 	if (parsed.fileArgs.length === 0) {
-		return buildInitialMessage({ parsed, stdinContent });
+		const { initialMessage, initialAttachments } = buildInitialMessage({ parsed, stdinContent });
+		return {
+			initialMessage,
+			initialAttachments,
+		};
 	}
 
-	const { text, images } = await processFileArguments(parsed.fileArgs, { autoResizeImages });
-	return buildInitialMessage({
+	const { text, attachments } = await processFileArguments(parsed.fileArgs, { autoResizeImages, model });
+	const { initialMessage, initialAttachments } = buildInitialMessage({
 		parsed,
 		fileText: text,
-		fileImages: images,
+		fileAttachments: attachments,
 		stdinContent,
 	});
+	return {
+		initialMessage,
+		initialAttachments,
+	};
 }
 
 /** Result from resolving a session argument */
@@ -731,9 +740,10 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("readPipedStdin");
 
-	const { initialMessage, initialImages } = await prepareInitialMessage(
+	const { initialMessage, initialAttachments } = await prepareInitialMessage(
 		parsed,
 		settingsManager.getImageAutoResize(),
+		session.model,
 		stdinContent,
 	);
 	time("prepareInitialMessage");
@@ -772,7 +782,7 @@ export async function main(args: string[], options?: MainOptions) {
 			modelFallbackMessage,
 			autoTrustOnReloadCwd,
 			initialMessage,
-			initialImages,
+			initialAttachments,
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
 		});
@@ -799,7 +809,7 @@ export async function main(args: string[], options?: MainOptions) {
 			mode: toPrintOutputMode(appMode),
 			messages: parsed.messages,
 			initialMessage,
-			initialImages,
+			initialAttachments,
 		});
 		stopThemeWatcher();
 		restoreStdout();

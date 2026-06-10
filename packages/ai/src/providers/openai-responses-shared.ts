@@ -17,6 +17,7 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
+	DocumentContent,
 	ImageContent,
 	Model,
 	StopReason,
@@ -27,6 +28,7 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.ts";
+import { sanitizeAttachmentMimeType, throwUnsupportedDocumentSerialization } from "../utils/document-utils.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
@@ -148,10 +150,13 @@ export function convertResponsesMessages<TApi extends Api>(
 							text: sanitizeSurrogates(item.text),
 						} satisfies ResponseInputText;
 					}
+					if (item.type === "document") {
+						return throwUnsupportedDocumentSerialization(item, "user messages");
+					}
 					return {
 						type: "input_image",
 						detail: "auto",
-						image_url: `data:${item.mimeType};base64,${item.data}`,
+						image_url: `data:${sanitizeAttachmentMimeType(item.mimeType)};base64,${item.data}`,
 					} satisfies ResponseInputImage;
 				});
 				if (content.length === 0) continue;
@@ -220,6 +225,10 @@ export function convertResponsesMessages<TApi extends Api>(
 			if (output.length === 0) continue;
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
+			const documentBlock = msg.content.find((c): c is DocumentContent => c.type === "document");
+			if (documentBlock) {
+				throwUnsupportedDocumentSerialization(documentBlock, "tool results");
+			}
 			const textResult = msg.content
 				.filter((c): c is TextContent => c.type === "text")
 				.map((c) => c.text)
@@ -244,7 +253,7 @@ export function convertResponsesMessages<TApi extends Api>(
 						contentParts.push({
 							type: "input_image",
 							detail: "auto",
-							image_url: `data:${block.mimeType};base64,${block.data}`,
+							image_url: `data:${sanitizeAttachmentMimeType(block.mimeType)};base64,${block.data}`,
 						});
 					}
 				}

@@ -127,9 +127,48 @@ function generateThemeVars(themeName?: string): string {
 	return lines.join("\n      ");
 }
 
+function buildAttachmentPlaceholder(block: { type: "image" | "document"; mimeType?: unknown; fileName?: unknown }): {
+	type: "text";
+	text: string;
+} {
+	if (block.type === "document") {
+		const name = typeof block.fileName === "string" && block.fileName.length > 0 ? `: ${block.fileName}` : "";
+		return { type: "text", text: `[document attachment omitted from export${name}]` };
+	}
+	const mime = typeof block.mimeType === "string" && block.mimeType.length > 0 ? `: ${block.mimeType}` : "";
+	return { type: "text", text: `[image attachment omitted from export${mime}]` };
+}
+
+function sanitizeExportValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map((item) => sanitizeExportValue(item));
+	}
+	if (!value || typeof value !== "object") {
+		return value;
+	}
+
+	const record = value as Record<string, unknown>;
+	if (record.type === "image" || record.type === "document") {
+		return buildAttachmentPlaceholder({
+			type: record.type,
+			mimeType: record.mimeType,
+			fileName: record.fileName,
+		});
+	}
+
+	return Object.fromEntries(
+		Object.entries(record).map(([key, nestedValue]) => [key, sanitizeExportValue(nestedValue)]),
+	);
+}
+
+function buildExportEntries(entries: SessionEntry[]): SessionEntry[] {
+	return entries.map((entry) => sanitizeExportValue(entry) as SessionEntry);
+}
+
 interface SessionData {
 	header: ReturnType<SessionManager["getHeader"]>;
 	entries: ReturnType<SessionManager["getEntries"]>;
+	downloadEntries?: ReturnType<SessionManager["getEntries"]>;
 	leafId: string | null;
 	systemPrompt?: string;
 	tools?: Array<Pick<ToolDefinition, "name" | "description" | "parameters">>;
@@ -262,7 +301,8 @@ export async function exportSessionToHtml(
 
 	const sessionData: SessionData = {
 		header: sm.getHeader(),
-		entries,
+		entries: buildExportEntries(entries),
+		downloadEntries: buildExportEntries(entries),
 		leafId: sm.getLeafId(),
 		systemPrompt: state?.systemPrompt,
 		tools: state?.tools?.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
@@ -297,7 +337,8 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 
 	const sessionData: SessionData = {
 		header: sm.getHeader(),
-		entries: sm.getEntries(),
+		entries: buildExportEntries(sm.getEntries()),
+		downloadEntries: buildExportEntries(sm.getEntries()),
 		leafId: sm.getLeafId(),
 		systemPrompt: undefined,
 		tools: undefined,

@@ -30,11 +30,11 @@ import {
 	type Context,
 	calculateCost,
 	createAssistantMessageEventStream,
-	type ImageContent,
 	type Message,
 	type Model,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
+	type PromptContentBlock,
 	type SimpleStreamOptions,
 	type StopReason,
 	type TextContent,
@@ -186,25 +186,40 @@ function sanitizeSurrogates(text: string): string {
 }
 
 function convertContentBlocks(
-	content: (TextContent | ImageContent)[],
+	content: PromptContentBlock[],
 ): string | Array<{ type: "text"; text: string } | { type: "image"; source: any }> {
+	type AnthropicContentBlock = { type: "text"; text: string } | { type: "image"; source: any };
 	const hasImages = content.some((c) => c.type === "image");
 	if (!hasImages) {
-		return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
+		return sanitizeSurrogates(
+			content
+				.map((block) => {
+					if (block.type === "text") return block.text;
+					if (block.type === "document") return `[document attached: ${block.fileName ?? block.mimeType}]`;
+					return "";
+				})
+				.filter(Boolean)
+				.join("\n"),
+		);
 	}
 
-	const blocks = content.map((block) => {
+	const blocks: AnthropicContentBlock[] = content.flatMap((block): AnthropicContentBlock[] => {
 		if (block.type === "text") {
-			return { type: "text" as const, text: sanitizeSurrogates(block.text) };
+			return [{ type: "text" as const, text: sanitizeSurrogates(block.text) }];
 		}
-		return {
-			type: "image" as const,
-			source: {
-				type: "base64" as const,
-				media_type: block.mimeType,
-				data: block.data,
+		if (block.type === "document") {
+			return [{ type: "text" as const, text: `[document attached: ${block.fileName ?? block.mimeType}]` }];
+		}
+		return [
+			{
+				type: "image" as const,
+				source: {
+					type: "base64" as const,
+					media_type: block.mimeType,
+					data: block.data,
+				},
 			},
-		};
+		];
 	});
 
 	if (!blocks.some((b) => b.type === "text")) {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/utils/image-resize.js", () => ({
 	resizeImage: vi.fn(),
+	getImageDimensions: vi.fn(async () => ({ width: 1, height: 1 })),
 	formatDimensionNote: vi.fn(() => undefined),
 }));
 
@@ -47,7 +48,7 @@ describe("image resize callers", () => {
 
 		const result = await processFileArguments([imagePath]);
 
-		expect(result.images).toHaveLength(0);
+		expect(result.attachments).toHaveLength(0);
 		expect(result.text).toContain("Image omitted");
 	});
 });

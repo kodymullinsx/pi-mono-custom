@@ -2,9 +2,9 @@ import {
 	type ImageContent,
 	type Message,
 	type Model,
+	type PromptContentBlock,
 	type SimpleStreamOptions,
 	streamSimple,
-	type TextContent,
 	type ThinkingBudgets,
 	type Transport,
 } from "@earendil-works/pi-ai";
@@ -376,7 +376,7 @@ export class Agent {
 			return [input];
 		}
 
-		const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
+		const content: PromptContentBlock[] = [{ type: "text", text: input }];
 		if (images && images.length > 0) {
 			content.push(...images);
 		}

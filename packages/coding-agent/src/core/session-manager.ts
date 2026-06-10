@@ -1,6 +1,6 @@
 import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
+import type { Message, PromptContentBlock, TextContent } from "@earendil-works/pi-ai";
+import { createHash, randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -9,12 +9,13 @@ import {
 	mkdirSync,
 	openSync,
 	readdirSync,
+	readFileSync,
 	readSync,
 	statSync,
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
-import { join, resolve } from "path";
+import { extname, join, resolve } from "path";
 import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
@@ -131,7 +132,7 @@ export interface SessionInfoEntry extends SessionEntryBase {
 export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
 	type: "custom_message";
 	customType: string;
-	content: string | (TextContent | ImageContent)[];
+	content: string | PromptContentBlock[];
 	details?: T;
 	display: boolean;
 }
@@ -220,6 +221,228 @@ function generateId(byId: { has(id: string): boolean }): string {
 	}
 	// Fallback to full UUID if somehow we have collisions
 	return randomUUID();
+}
+
+interface PersistedAttachmentRef {
+	storage: "sidecar";
+	attachmentType: "image" | "document";
+	file: string;
+	mimeType: string;
+	fileName?: string;
+}
+
+type PersistedAttachmentTextBlock = TextContent & {
+	_piAttachmentRef?: PersistedAttachmentRef;
+};
+
+function getAttachmentDirForSessionFile(sessionFile: string): string {
+	const normalized = resolve(sessionFile);
+	return `${normalized.replace(/\.jsonl$/i, "")}.attachments`;
+}
+
+function extensionForAttachmentBlock(block: Extract<PromptContentBlock, { type: "image" | "document" }>): string {
+	if (block.type === "document") {
+		const documentExt = block.fileName ? extname(block.fileName) : "";
+		if (documentExt) return documentExt;
+		if (block.mimeType === "application/pdf") return ".pdf";
+		return ".bin";
+	}
+
+	switch (block.mimeType) {
+		case "image/jpeg":
+			return ".jpg";
+		case "image/png":
+			return ".png";
+		case "image/gif":
+			return ".gif";
+		case "image/webp":
+			return ".webp";
+		default:
+			return ".bin";
+	}
+}
+
+function persistAttachmentBlock(
+	block: Extract<PromptContentBlock, { type: "image" | "document" }>,
+	sessionFile: string,
+): PersistedAttachmentRef {
+	const attachmentDir = getAttachmentDirForSessionFile(sessionFile);
+	if (!existsSync(attachmentDir)) {
+		mkdirSync(attachmentDir, { recursive: true });
+	}
+
+	const hash = createHash("sha256")
+		.update(block.type)
+		.update("\0")
+		.update(block.mimeType)
+		.update("\0")
+		.update(block.type === "document" ? (block.fileName ?? "") : "")
+		.update("\0")
+		.update(block.data)
+		.digest("hex");
+	const file = `${hash}${extensionForAttachmentBlock(block)}`;
+	const absolutePath = join(attachmentDir, file);
+	if (!existsSync(absolutePath)) {
+		writeFileSync(absolutePath, Buffer.from(block.data, "base64"));
+	}
+
+	return {
+		storage: "sidecar",
+		attachmentType: block.type,
+		file,
+		mimeType: block.mimeType,
+		fileName: block.type === "document" ? block.fileName : undefined,
+	};
+}
+
+function buildPersistedAttachmentPlaceholder(
+	block: Extract<PromptContentBlock, { type: "image" | "document" }>,
+): TextContent {
+	if (block.type === "image") {
+		return {
+			type: "text",
+			text: "[image]",
+		};
+	}
+
+	const name = block.fileName ?? "document";
+	return {
+		type: "text",
+		text: name === "document" ? "[document]" : `[document: ${name}]`,
+	};
+}
+
+function sanitizePromptContentForPersistence(
+	content: PromptContentBlock[],
+	sessionFile?: string,
+): Array<PromptContentBlock | PersistedAttachmentTextBlock> {
+	let changed = false;
+	const sanitized = content.map((block) => {
+		if (block.type === "image" || block.type === "document") {
+			changed = true;
+			const placeholder = buildPersistedAttachmentPlaceholder(block);
+			if (!sessionFile) {
+				return placeholder;
+			}
+			return {
+				...placeholder,
+				_piAttachmentRef: persistAttachmentBlock(block, sessionFile),
+			} satisfies PersistedAttachmentTextBlock;
+		}
+		return block;
+	});
+	return changed ? sanitized : content;
+}
+
+function serializeFileEntryForPersistence(entry: FileEntry, sessionFile?: string): string {
+	if (entry.type === "session") {
+		return JSON.stringify(entry);
+	}
+
+	if (entry.type === "message") {
+		const sanitizedMessage =
+			entry.message.role !== "user" && entry.message.role !== "toolResult" && entry.message.role !== "custom"
+				? entry.message
+				: typeof entry.message.content === "string"
+					? entry.message
+					: ({
+							...entry.message,
+							content: sanitizePromptContentForPersistence(entry.message.content, sessionFile),
+						} as AgentMessage);
+		return JSON.stringify(sanitizedMessage === entry.message ? entry : { ...entry, message: sanitizedMessage });
+	}
+
+	if (entry.type === "custom_message" && typeof entry.content !== "string") {
+		const sanitizedContent = sanitizePromptContentForPersistence(entry.content, sessionFile);
+		return JSON.stringify(sanitizedContent === entry.content ? entry : { ...entry, content: sanitizedContent });
+	}
+
+	return JSON.stringify(entry);
+}
+
+function hydratePersistedAttachmentBlock(
+	block: PromptContentBlock | PersistedAttachmentTextBlock,
+	sessionFile: string,
+): PromptContentBlock {
+	if (block.type !== "text" || !("_piAttachmentRef" in block) || !block._piAttachmentRef) {
+		return block;
+	}
+
+	const ref = block._piAttachmentRef;
+	if (ref.storage !== "sidecar") {
+		return {
+			type: "text",
+			text: block.text,
+		};
+	}
+
+	const absolutePath = join(getAttachmentDirForSessionFile(sessionFile), ref.file);
+	if (!existsSync(absolutePath)) {
+		const label = ref.fileName
+			? `${ref.attachmentType} attachment "${ref.fileName}"`
+			: `${ref.attachmentType} attachment`;
+		return {
+			type: "text",
+			text: `[${label} missing: expected sidecar file ${absolutePath}]`,
+		};
+	}
+
+	const data = readFileSync(absolutePath).toString("base64");
+	if (ref.attachmentType === "image") {
+		return {
+			type: "image",
+			mimeType: ref.mimeType,
+			data,
+		};
+	}
+
+	return {
+		type: "document",
+		mimeType: ref.mimeType,
+		data,
+		fileName: ref.fileName,
+	};
+}
+
+function hydratePromptContentFromPersistence(content: PromptContentBlock[], sessionFile: string): PromptContentBlock[] {
+	let changed = false;
+	const hydrated = content.map((block) => {
+		const next = hydratePersistedAttachmentBlock(
+			block as PromptContentBlock | PersistedAttachmentTextBlock,
+			sessionFile,
+		);
+		if (next !== block) {
+			changed = true;
+		}
+		return next;
+	});
+	return changed ? hydrated : content;
+}
+
+function hydrateMessageFromPersistence(message: AgentMessage, sessionFile: string): AgentMessage {
+	if (
+		(message.role !== "user" && message.role !== "toolResult" && message.role !== "custom") ||
+		typeof message.content === "string"
+	) {
+		return message;
+	}
+
+	const hydratedContent = hydratePromptContentFromPersistence(message.content, sessionFile);
+	return hydratedContent === message.content ? message : { ...message, content: hydratedContent };
+}
+
+function hydrateEntryFromPersistence(entry: FileEntry, sessionFile: string): FileEntry {
+	if (entry.type === "message") {
+		const hydratedMessage = hydrateMessageFromPersistence(entry.message, sessionFile);
+		return hydratedMessage === entry.message ? entry : { ...entry, message: hydratedMessage };
+	}
+
+	if (entry.type === "custom_message" && typeof entry.content !== "string") {
+		const hydratedContent = hydratePromptContentFromPersistence(entry.content, sessionFile);
+		return hydratedContent === entry.content ? entry : { ...entry, content: hydratedContent };
+	}
+
+	return entry;
 }
 
 /** Migrate v1 → v2: add id/parentId tree structure. Mutates in place. */
@@ -463,7 +686,7 @@ function parseSessionEntryLine(line: string): FileEntry | null {
 }
 
 /** Exported for testing */
-export function loadEntriesFromFile(filePath: string): FileEntry[] {
+export function loadEntriesFromFile(filePath: string, options?: { hydrateAttachments?: boolean }): FileEntry[] {
 	const resolvedFilePath = normalizePath(filePath);
 	if (!existsSync(resolvedFilePath)) return [];
 
@@ -504,7 +727,9 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 		return [];
 	}
 
-	return entries;
+	return options?.hydrateAttachments
+		? entries.map((entry) => hydrateEntryFromPersistence(entry, resolvedFilePath))
+		: entries;
 }
 
 function readSessionHeader(filePath: string): SessionHeader | null {
@@ -792,7 +1017,7 @@ export class SessionManager {
 	setSessionFile(sessionFile: string): void {
 		this.sessionFile = resolvePath(sessionFile);
 		if (existsSync(this.sessionFile)) {
-			this.fileEntries = loadEntriesFromFile(this.sessionFile);
+			this.fileEntries = loadEntriesFromFile(this.sessionFile, { hydrateAttachments: true });
 
 			// If file was empty or corrupted (no valid header), truncate and start fresh
 			// to avoid appending messages without a session header (which breaks the session)
@@ -874,7 +1099,7 @@ export class SessionManager {
 		const fd = openSync(this.sessionFile, "w");
 		try {
 			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+				writeFileSync(fd, `${serializeFileEntryForPersistence(entry, this.sessionFile)}\n`);
 			}
 		} finally {
 			closeSync(fd);
@@ -911,7 +1136,7 @@ export class SessionManager {
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
 			if (this.flushed) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+				appendFileSync(this.sessionFile, `${serializeFileEntryForPersistence(entry, this.sessionFile)}\n`);
 			} else {
 				// Mark as not flushed so when assistant arrives, all entries get written
 				this.flushed = false;
@@ -923,14 +1148,14 @@ export class SessionManager {
 			const fd = openSync(this.sessionFile, "wx");
 			try {
 				for (const e of this.fileEntries) {
-					writeFileSync(fd, `${JSON.stringify(e)}\n`);
+					writeFileSync(fd, `${serializeFileEntryForPersistence(e, this.sessionFile)}\n`);
 				}
 			} finally {
 				closeSync(fd);
 			}
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			appendFileSync(this.sessionFile, `${serializeFileEntryForPersistence(entry, this.sessionFile)}\n`);
 		}
 	}
 
@@ -1053,14 +1278,14 @@ export class SessionManager {
 	/**
 	 * Append a custom message entry (for extensions) that participates in LLM context.
 	 * @param customType Extension identifier for filtering on reload
-	 * @param content Message content (string or TextContent/ImageContent array)
+	 * @param content Message content (string or structured prompt content array)
 	 * @param display Whether to show in TUI (true = styled display, false = hidden)
 	 * @param details Optional extension-specific metadata (not sent to LLM)
 	 * @returns Entry id
 	 */
 	appendCustomMessageEntry<T = unknown>(
 		customType: string,
-		content: string | (TextContent | ImageContent)[],
+		content: string | PromptContentBlock[],
 		display: boolean,
 		details?: T,
 	): string {
@@ -1396,7 +1621,7 @@ export class SessionManager {
 	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
 		const resolvedPath = resolvePath(path);
 		// Extract cwd from session header if possible, otherwise use process.cwd()
-		const entries = loadEntriesFromFile(resolvedPath);
+		const entries = loadEntriesFromFile(resolvedPath, { hydrateAttachments: true });
 		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
 		const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
@@ -1439,7 +1664,7 @@ export class SessionManager {
 	): SessionManager {
 		const resolvedSourcePath = resolvePath(sourcePath);
 		const resolvedTargetCwd = resolvePath(targetCwd);
-		const sourceEntries = loadEntriesFromFile(resolvedSourcePath);
+		const sourceEntries = loadEntriesFromFile(resolvedSourcePath, { hydrateAttachments: true });
 		if (sourceEntries.length === 0) {
 			throw new Error(`Cannot fork: source session file is empty or invalid: ${resolvedSourcePath}`);
 		}
@@ -1477,7 +1702,7 @@ export class SessionManager {
 		// Copy all non-header entries from source
 		for (const entry of sourceEntries) {
 			if (entry.type !== "session") {
-				appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
+				appendFileSync(newSessionFile, `${serializeFileEntryForPersistence(entry, newSessionFile)}\n`);
 			}
 		}
 

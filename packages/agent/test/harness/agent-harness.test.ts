@@ -1,4 +1,10 @@
-import { fauxAssistantMessage, fauxToolCall, getModel, registerFauxProvider } from "@earendil-works/pi-ai";
+import {
+	type AttachmentContent,
+	fauxAssistantMessage,
+	fauxToolCall,
+	getModel,
+	registerFauxProvider,
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
@@ -148,6 +154,43 @@ describe("AgentHarness", () => {
 		});
 		expect(requestText).toEqual(["hello", "hook"]);
 		expect(persistedText).toEqual(["hello", "hook"]);
+	});
+
+	it("passes first-class attachments through prompt and before_agent_start", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		const attachment: AttachmentContent = {
+			type: "document",
+			mimeType: "application/pdf",
+			fileName: "paper.pdf",
+			data: "JVBERi0x",
+		};
+		let requestAttachment: AttachmentContent | undefined;
+		let hookAttachments: AttachmentContent[] | undefined;
+		registration.setResponses([
+			(context) => {
+				const userMessage = context.messages.find((message) => message.role === "user");
+				const content = userMessage?.content;
+				requestAttachment = Array.isArray(content)
+					? content.find((part): part is AttachmentContent => part.type === "document" || part.type === "image")
+					: undefined;
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session: new Session(new InMemorySessionStorage()),
+			model: registration.getModel(),
+		});
+		harness.on("before_agent_start", (event) => {
+			hookAttachments = event.attachments;
+			return undefined;
+		});
+
+		await harness.prompt("hello", { attachments: [attachment] });
+
+		expect(hookAttachments).toEqual([attachment]);
+		expect(requestAttachment).toEqual(attachment);
 	});
 
 	it("abort clears steer and follow-up queues but preserves next-turn messages", async () => {

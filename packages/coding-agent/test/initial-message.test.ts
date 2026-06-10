@@ -45,4 +45,16 @@ describe("buildInitialMessage", () => {
 		expect(result.initialMessage).toBe("stdin\nfile\nExplain it");
 		expect(parsed.messages).toEqual(["Second message"]);
 	});
+
+	test("returns initial attachments when file attachments are present", () => {
+		const parsed = createArgs(["Explain it"]);
+		const result = buildInitialMessage({
+			parsed,
+			fileText: "file\n",
+			fileAttachments: [{ type: "image", data: "abc", mimeType: "image/png" }],
+		});
+
+		expect(result.initialMessage).toBe("file\nExplain it");
+		expect(result.initialAttachments).toEqual([{ type: "image", data: "abc", mimeType: "image/png" }]);
+	});
 });

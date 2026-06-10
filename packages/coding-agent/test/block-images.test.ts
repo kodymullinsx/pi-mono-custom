@@ -102,8 +102,8 @@ describe("blockImages setting", () => {
 
 			const result = await processFileArguments([imagePath]);
 
-			expect(result.images).toHaveLength(1);
-			expect(result.images[0].type).toBe("image");
+			expect(result.attachments).toHaveLength(1);
+			expect(result.attachments[0].type).toBe("image");
 		});
 
 		it("should process text files normally", async () => {
@@ -113,7 +113,7 @@ describe("blockImages setting", () => {
 
 			const result = await processFileArguments([textPath]);
 
-			expect(result.images).toHaveLength(0);
+			expect(result.attachments).toHaveLength(0);
 			expect(result.text).toContain("Hello, world!");
 		});
 	});
