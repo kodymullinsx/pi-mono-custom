@@ -17,12 +17,12 @@ vi.mock("../src/utils/pdf.js", () => ({
 
 import { processFileArguments } from "../src/cli/file-processor.ts";
 
-function createModel(input: Model<any>["input"]): Model<any> {
+function createModel(input: Model<any>["input"], api = "openai-responses"): Model<any> {
 	return {
 		id: "test-model",
 		name: "test-model",
 		provider: "openai",
-		api: "openai-responses",
+		api,
 		baseUrl: "https://api.example.com",
 		reasoning: false,
 		input,
@@ -63,6 +63,34 @@ describe("processFileArguments PDF handling", () => {
 			mimeType: "image/jpeg",
 		});
 		expect(result.text).toContain("[PDF pages 1 attached as images from small.pdf.]");
+	});
+
+	test("routes PDFs to images for OpenAI-compatible vision models instead of document blocks", async () => {
+		const pdfPath = join(tempRoot, "openai-compatible.pdf");
+		writeFileSync(pdfPath, "%PDF-1.7");
+
+		pdfMocks.getPDFPageCount.mockResolvedValue(1);
+		pdfMocks.renderPdfPagesToImageBlocks.mockResolvedValue([
+			{
+				type: "image",
+				data: Buffer.from("rendered-page").toString("base64"),
+				mimeType: "image/jpeg",
+			},
+		]);
+
+		const result = await processFileArguments([pdfPath], {
+			model: createModel(["text", "image"], "openai-completions"),
+		});
+
+		expect(result.attachments).toEqual([
+			{
+				type: "image",
+				data: Buffer.from("rendered-page").toString("base64"),
+				mimeType: "image/jpeg",
+			},
+		]);
+		expect(result.attachments.some((attachment) => attachment.type === "document")).toBe(false);
+		expect(result.text).toContain("[PDF pages 1 attached as images from openai-compatible.pdf.]");
 	});
 
 	test("auto-attaches the first range for large PDFs", async () => {
