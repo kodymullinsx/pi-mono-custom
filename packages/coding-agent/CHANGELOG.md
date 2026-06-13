@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Added custom `models.json` schema support for OpenAI-compatible `compat.supportsTools`.
+
 ## [0.79.1] - 2026-06-09
 
 ### New Features

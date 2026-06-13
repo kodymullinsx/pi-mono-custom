@@ -111,6 +111,91 @@ describe("openai-completions tool_choice", () => {
 		expect(params.tools?.length ?? 0).toBeGreaterThan(0);
 	});
 
+	it("omits native tools and serializes tool history when compat disables tool support", async () => {
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = {
+			...baseModel,
+			api: "openai-completions",
+			compat: { supportsTools: false },
+		} as const;
+		const tools: Tool[] = [
+			{
+				name: "ping",
+				description: "Ping tool",
+				parameters: Type.Object({
+					ok: Type.Boolean(),
+				}),
+			},
+		];
+		const assistantMessage: AssistantMessage = {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [{ type: "toolCall", id: "call_1", name: "ping", arguments: { ok: true } }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "call_1",
+			toolName: "ping",
+			content: [{ type: "text", text: "pong" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Call ping", timestamp: Date.now() },
+					assistantMessage,
+					toolResult,
+					{ role: "user", content: "continue", timestamp: Date.now() },
+				],
+				tools,
+			},
+			{
+				apiKey: "test",
+				toolChoice: "required",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			} as unknown as Parameters<typeof streamSimple>[2],
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as {
+			messages?: Array<{ role?: string; content?: unknown; tool_calls?: unknown[] }>;
+			tool_choice?: string;
+			tools?: unknown[];
+		};
+		const replayedAssistant = params.messages?.find((message) => message.role === "assistant");
+		const toolRoleMessage = params.messages?.find((message) => message.role === "tool");
+		const replayedToolResult = params.messages?.find(
+			(message) =>
+				message.role === "user" &&
+				typeof message.content === "string" &&
+				message.content.includes("Tool result: ping"),
+		);
+
+		expect(params.tools).toBeUndefined();
+		expect(params.tool_choice).toBeUndefined();
+		expect(replayedAssistant?.tool_calls).toBeUndefined();
+		expect(replayedAssistant?.content).toContain("Tool call: ping");
+		expect(toolRoleMessage).toBeUndefined();
+		expect(replayedToolResult?.content).toContain("pong");
+	});
+
 	it("omits strict when compat disables strict mode", async () => {
 		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
 		const model = {
@@ -1066,6 +1151,7 @@ describe("openai-completions tool_choice", () => {
 				vercelGatewayRouting: {},
 				zaiToolStream: false,
 				supportsStrictMode: true,
+				supportsTools: true,
 				sendSessionAffinityHeaders: false,
 				supportsLongCacheRetention: true,
 			},

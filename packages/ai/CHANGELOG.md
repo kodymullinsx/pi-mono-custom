@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Added `compat.supportsTools: false` for OpenAI-compatible custom models that reject native tool schemas, serializing replayed tool history as text instead.
+
 ## [0.79.1] - 2026-06-09
 
 ### Added

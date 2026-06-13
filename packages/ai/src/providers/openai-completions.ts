@@ -84,6 +84,19 @@ function isDocumentContentBlock(block: { type: string }): block is DocumentConte
 	return block.type === "document";
 }
 
+function stringifyAssistantContent(content: ChatCompletionAssistantMessageParam["content"]): string {
+	if (typeof content === "string") {
+		return content;
+	}
+	if (!Array.isArray(content)) {
+		return "";
+	}
+	return content
+		.filter((part): part is ChatCompletionContentPartText => part.type === "text")
+		.map((part) => part.text)
+		.join("");
+}
+
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -546,21 +559,23 @@ function buildParams(
 		params.temperature = options.temperature;
 	}
 
-	if (context.tools && context.tools.length > 0) {
-		params.tools = convertTools(context.tools, compat);
-		if (compat.zaiToolStream) {
-			(params as any).tool_stream = true;
+	if (compat.supportsTools) {
+		if (context.tools && context.tools.length > 0) {
+			params.tools = convertTools(context.tools, compat);
+			if (compat.zaiToolStream) {
+				(params as any).tool_stream = true;
+			}
+		} else if (hasToolHistory(context.messages)) {
+			// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
+			params.tools = [];
 		}
-	} else if (hasToolHistory(context.messages)) {
-		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
-		params.tools = [];
 	}
 
 	if (cacheControl) {
 		applyAnthropicCacheControl(messages, params.tools, cacheControl);
 	}
 
-	if (options?.toolChoice) {
+	if (compat.supportsTools && options?.toolChoice) {
 		params.tool_choice = options.toolChoice;
 	}
 
@@ -791,7 +806,12 @@ export function convertMessages(
 		const msg = transformedMessages[i];
 		// Some providers don't allow user messages directly after tool results
 		// Insert a synthetic assistant message to bridge the gap
-		if (compat.requiresAssistantAfterToolResult && lastRole === "toolResult" && msg.role === "user") {
+		if (
+			compat.supportsTools &&
+			compat.requiresAssistantAfterToolResult &&
+			lastRole === "toolResult" &&
+			msg.role === "user"
+		) {
 			params.push({
 				role: "assistant",
 				content: "I have processed the tool results.",
@@ -887,26 +907,34 @@ export function convertMessages(
 
 			const toolCalls = msg.content.filter(isToolCallBlock);
 			if (toolCalls.length > 0) {
-				assistantMsg.tool_calls = toolCalls.map((tc) => ({
-					id: tc.id,
-					type: "function" as const,
-					function: {
-						name: tc.name,
-						arguments: JSON.stringify(tc.arguments),
-					},
-				}));
-				const reasoningDetails = toolCalls
-					.filter((tc) => tc.thoughtSignature)
-					.map((tc) => {
-						try {
-							return JSON.parse(tc.thoughtSignature!);
-						} catch {
-							return null;
-						}
-					})
-					.filter(Boolean);
-				if (reasoningDetails.length > 0) {
-					(assistantMsg as any).reasoning_details = reasoningDetails;
+				if (compat.supportsTools) {
+					assistantMsg.tool_calls = toolCalls.map((tc) => ({
+						id: tc.id,
+						type: "function" as const,
+						function: {
+							name: tc.name,
+							arguments: JSON.stringify(tc.arguments),
+						},
+					}));
+					const reasoningDetails = toolCalls
+						.filter((tc) => tc.thoughtSignature)
+						.map((tc) => {
+							try {
+								return JSON.parse(tc.thoughtSignature!);
+							} catch {
+								return null;
+							}
+						})
+						.filter(Boolean);
+					if (reasoningDetails.length > 0) {
+						(assistantMsg as any).reasoning_details = reasoningDetails;
+					}
+				} else {
+					const toolCallText = toolCalls
+						.map((tc) => `Tool call: ${tc.name}\n${sanitizeSurrogates(JSON.stringify(tc.arguments))}`)
+						.join("\n\n");
+					const text = stringifyAssistantContent(assistantMsg.content);
+					assistantMsg.content = [text, toolCallText].filter((part) => part.length > 0).join("\n\n");
 				}
 			}
 			if (
@@ -931,6 +959,7 @@ export function convertMessages(
 			params.push(assistantMsg);
 		} else if (msg.role === "toolResult") {
 			const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+			const textBlocks: string[] = [];
 			let j = i;
 
 			for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
@@ -949,16 +978,25 @@ export function convertMessages(
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;
-				// Some providers require the 'name' field in tool results
-				const toolResultMsg: ChatCompletionToolMessageParam = {
-					role: "tool",
-					content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
-					tool_call_id: toolMsg.toolCallId,
-				};
-				if (compat.requiresToolResultName && toolMsg.toolName) {
-					(toolResultMsg as any).name = toolMsg.toolName;
+				if (!compat.supportsTools) {
+					const fallbackText = hasImages ? "(see attached image)" : "(empty tool result)";
+					textBlocks.push(
+						`Tool result: ${toolMsg.toolName || toolMsg.toolCallId}\n${sanitizeSurrogates(hasText ? textResult : fallbackText)}`,
+					);
 				}
-				params.push(toolResultMsg);
+
+				// Some providers require the 'name' field in tool results
+				if (compat.supportsTools) {
+					const toolResultMsg: ChatCompletionToolMessageParam = {
+						role: "tool",
+						content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+						tool_call_id: toolMsg.toolCallId,
+					};
+					if (compat.requiresToolResultName && toolMsg.toolName) {
+						(toolResultMsg as any).name = toolMsg.toolName;
+					}
+					params.push(toolResultMsg);
+				}
 
 				if (hasImages && model.input.includes("image")) {
 					for (const block of toolMsg.content) {
@@ -976,7 +1014,27 @@ export function convertMessages(
 
 			i = j - 1;
 
-			if (imageBlocks.length > 0) {
+			if (!compat.supportsTools) {
+				const text = textBlocks.join("\n\n");
+				if (imageBlocks.length > 0) {
+					params.push({
+						role: "user",
+						content: [
+							{
+								type: "text",
+								text,
+							},
+							...imageBlocks,
+						],
+					});
+				} else {
+					params.push({
+						role: "user",
+						content: text,
+					});
+				}
+				lastRole = "user";
+			} else if (imageBlocks.length > 0) {
 				if (compat.requiresAssistantAfterToolResult) {
 					params.push({
 						role: "assistant",
@@ -1140,6 +1198,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		supportsReasoningEffort:
 			!isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway && !isNvidia && !isAntLing,
 		supportsUsageInStreaming: true,
+		supportsTools: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: false,
 		requiresAssistantAfterToolResult: false,
@@ -1185,6 +1244,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 		supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
+		supportsTools: model.compat.supportsTools ?? detected.supportsTools,
 		maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
 		requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
 		requiresAssistantAfterToolResult:
