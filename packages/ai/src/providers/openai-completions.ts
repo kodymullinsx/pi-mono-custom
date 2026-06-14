@@ -84,19 +84,6 @@ function isDocumentContentBlock(block: { type: string }): block is DocumentConte
 	return block.type === "document";
 }
 
-function stringifyAssistantContent(content: ChatCompletionAssistantMessageParam["content"]): string {
-	if (typeof content === "string") {
-		return content;
-	}
-	if (!Array.isArray(content)) {
-		return "";
-	}
-	return content
-		.filter((part): part is ChatCompletionContentPartText => part.type === "text")
-		.map((part) => part.text)
-		.join("");
-}
-
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -933,7 +920,16 @@ export function convertMessages(
 					const toolCallText = toolCalls
 						.map((tc) => `Tool call: ${tc.name}\n${sanitizeSurrogates(JSON.stringify(tc.arguments))}`)
 						.join("\n\n");
-					const text = stringifyAssistantContent(assistantMsg.content);
+					const existingContent = assistantMsg.content;
+					const text =
+						typeof existingContent === "string"
+							? existingContent
+							: Array.isArray(existingContent)
+								? existingContent
+										.filter((part): part is ChatCompletionContentPartText => part.type === "text")
+										.map((part) => part.text)
+										.join("")
+								: "";
 					assistantMsg.content = [text, toolCallText].filter((part) => part.length > 0).join("\n\n");
 				}
 			}
