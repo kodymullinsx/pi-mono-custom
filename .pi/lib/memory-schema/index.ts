@@ -151,7 +151,7 @@ export function generateMemoryIndex(memoryRoot: string): string {
 		"",
 		"---",
 		"",
-		"All domain files are at `~/projects/Memory/[path]/memory.md`. Read the relevant domain's memory.md for context.",
+		"All domain files are at `~/Workspace/Memory/[path]/memory.md`. Read the relevant domain's memory.md for context.",
 	);
 	return `${lines.join("\n")}\n`;
 }

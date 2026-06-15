@@ -75,7 +75,7 @@ node ~/.pi/agent/scripts/reconcile-memory-sources.mjs --domain <active-domain> -
 Scan the session for memory-worthy content (new facts, project state changes, decisions, corrections, contacts, deadlines). Then invoke the memory-creator skill with context about what changed.
 
 The memory-creator skill handles:
-- Routing to correct tree (`~/projects/Memory/` vs `~/work/Memory/`)
+- Routing to correct tree (`~/Workspace/Memory/` vs `~/work/Memory/`)
 - Reading existing domains and applying autonomous edits
 - Organizing content across memory.md and references/
 - Updating last_updated and syncing _index.md

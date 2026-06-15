@@ -8,7 +8,7 @@ description: Create, update, and optimize memory domains for the file-based doma
 ## Quick Reference
 
 **Two memory trees** (strictly segregated):
-- Personal + Projects: `~/projects/Memory/`
+- Personal + Projects: `~/Workspace/Memory/`
 - Work: `~/work/Memory/`
 
 **Three-layer structure:**
@@ -39,8 +39,8 @@ description: Create, update, and optimize memory domains for the file-based doma
 **Step 2 — Choose path**
 Follow the existing tree structure:
 - New work audit → `~/work/Memory/audit/[fy-name]/memory.md`
-- New personal domain → `~/projects/Memory/personal/[topic]/memory.md`
-- New project → `~/projects/Memory/projects/[project-name]/memory.md`
+- New personal domain → `~/Workspace/Memory/personal/[topic]/memory.md`
+- New project → `~/Workspace/Memory/projects/[project-name]/memory.md`
 - Create a sub-namespace when a category will generate multiple independent domains over time
 
 **Step 3 — Write `memory.md`** with this structure:

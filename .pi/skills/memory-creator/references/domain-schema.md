@@ -60,7 +60,7 @@ Reference files have **no frontmatter** and **no line limit**. One topic per fil
 | CWD | Index Injected |
 |---|---|
 | ~/work/* | ~/work/Memory/_index.md |
-| ~/projects/* | ~/projects/Memory/_index.md |
-| ~ (other) | ~/projects/Memory/_index.md |
+| ~/Workspace/* | ~/Workspace/Memory/_index.md |
+| ~ (other) | ~/Workspace/Memory/_index.md |
 
 Work and personal memory are strictly segregated. No cross-injection.

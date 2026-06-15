@@ -7,7 +7,7 @@ description: Use this skill whenever the user asks to control, inspect, edit, re
 
 This skill governs use of Kody's local PowerPoint MCP bridge. The bridge lets an agent operate on the active PowerPoint deck through a sideloaded Office.js taskpane and a localhost sidecar.
 
-Project root: `/Users/kodymullins/Projects/powerpoint-mcp-bridge`
+Project root: `/Users/kodymullins/Workspace/tooling/mcp/powerpoint-mcp-bridge`
 
 Architecture:
 
@@ -18,7 +18,7 @@ Architecture:
 Start by checking whether bridge tools are directly callable in the current harness. If tools named `ppt_status`, `ppt_list_slides`, `ppt_list_shapes`, `ppt_render_slide`, or similar are available, use them directly. If they are not available, inspect the local sidecar state from the project root:
 
 ```bash
-cd /Users/kodymullins/Projects/powerpoint-mcp-bridge && curl -sk https://localhost:3443/health
+cd /Users/kodymullins/Workspace/tooling/mcp/powerpoint-mcp-bridge && curl -sk https://localhost:3443/health
 ```
 
 A healthy bridge shows `sidecar: "running"` and `connected: true`. If the sidecar is not running, use `npm run dev` from the project root. If it is running but not connected, PowerPoint needs the sideloaded add-in open from Home > Add-ins > PowerPoint MCP Bridge. The sidecar only sees the deck whose taskpane is currently connected; with multiple taskpanes, the latest connection wins.

@@ -13,7 +13,7 @@ You are a memory quality auditor for a file-based domain memory system. You will
 
 Determine the memory root:
 - `work/*` → `~/work/Memory/`
-- `personal/*` or `projects/*` → `~/projects/Memory/`
+- `personal/*` or `projects/*` → `~/Workspace/Memory/`
 
 ## Step 1: Read the Domain
 

@@ -15,13 +15,13 @@ This skill documents the strategy decided on 2026-03-25, updated 2026-04-29. Rea
 
 | Tree | Path | Scope |
 |---|---|---|
-| Personal + Projects | `~/projects/Memory/` | Side projects, personal context, Pi/OpenClaw/tools |
+| Personal + Projects | `~/Workspace/Memory/` | Side projects, personal context, Pi/OpenClaw/tools |
 | Work | `~/work/Memory/` | Schwab IAD, professional context |
 
 **Routing is CWD-based in both Claude and Pi.** Claude uses `domain_memory.py` (`UserPromptSubmit` hook); Pi uses the `domain-memory` extension (`before_agent_start` event). Codex has no hook system — routing is manual there.
 
 - `~/work/...` → semantic route against `~/work/Memory/` with `scope="work"`; on match inject matched `memory.md` followed by the work `_index.md`; on no match or router failure inject the work `_index.md` only
-- all other paths → semantic route against `~/projects/Memory/` with `scope="personal"`; on match inject matched `memory.md` followed by the projects `_index.md`; on no match or router failure inject the projects `_index.md` only
+- all other paths → semantic route against `~/Workspace/Memory/` with `scope="personal"`; on match inject matched `memory.md` followed by the projects `_index.md`; on no match or router failure inject the projects `_index.md` only
 
 ### Three-Layer Structure
 
@@ -155,6 +155,6 @@ The routing problem: a transcript from a session touching both work and personal
 
 ## Deprecated / Archived
 
-- **mem0 / Qdrant**: fully archived to `~/Projects/Archive/mem0-archived/`. Do not reference or use.
+- **mem0 / Qdrant**: fully archived to `~/Workspace/.archive/mem0-archived/`. Do not reference or use.
 - **together** skill: deleted from all CLIs on 2026-03-25. DeepInfra is the preferred inference provider.
 - **OpenClaw "OpenCAW"**: name is deprecated. Always use "OpenClaw".
