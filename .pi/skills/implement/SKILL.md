@@ -87,7 +87,7 @@ If research materially changes the scope or approach, surface that before implem
 
 ### Research pattern defaults
 
-Use direct tools for tight local questions.
+Use direct tools for tight local questions. When working in TypeScript/JavaScript, Python, C/C++, Swift, Kotlin, or Rust, prefer the configured LSP where it gives faster or more precise symbol evidence: `typescript-language-server`, `pyright`, `clangd`, `sourcekit-lsp`, `kotlin-language-server`, and `rust-analyzer` are expected local options. Use them for go-to-definition, references, hover/type facts, and implementation jumps; fall back to `sg`, `rg`, and direct file reads when the LSP is unavailable, ambiguous, or slower than source inspection. In JavaScript/TypeScript projects, consider `knip` when the change may create or remove entrypoints, exports, dependencies, scripts, or whole files; treat unconfigured baseline output as triage input, not an automatic cleanup mandate.
 
 Use sequential subagent calls when the work naturally breaks into trace -> design handoffs. A good default is:
 
