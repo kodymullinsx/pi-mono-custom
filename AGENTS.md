@@ -1,5 +1,13 @@
 # Development Rules
 
+## Project Context
+
+- Canonical checkout: `/Users/kodymullins/Workspace/tooling/pi-mono-custom`.
+- This is the live Pi Harness source fork and runtime-adjacent source workspace. Do not archive, relocate, or treat it as disposable without an explicit runtime migration.
+- Source-level memory lives at `/Users/kodymullins/Workspace/Memory/tooling/pi-mono-custom/memory.md`; live install/config/runtime memory lives at `/Users/kodymullins/Workspace/Memory/tooling/pi-harness/memory.md`.
+- Distinguish the source checkout, global installed Pi binary, `.pi/extensions`, runtime config, sessions, model routing, and active processes. Prove the layer the user asked about.
+- Current package directories in this checkout are `packages/ai`, `packages/agent`, `packages/coding-agent`, `packages/tui`, `packages/mom`, and `packages/web-ui`.
+
 ## Conversational Style
 
 - Keep answers short and concise
