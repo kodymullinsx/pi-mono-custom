@@ -27,7 +27,6 @@ Current branch `upgrade/first-class-pdf-image-v0791` sits a handful of commits a
 ## Commands
 ```
 npm install --ignore-scripts   # install deps, no lifecycle scripts
-npm run build                  # build all packages
 npm run check                  # lint, format, type check (run after code changes)
 ./test.sh                      # run tests (skips LLM-dependent tests w/o API keys)
 ./pi-test.sh                   # run pi from source, from any directory
@@ -35,6 +34,7 @@ npm run check                  # lint, format, type check (run after code change
 
 ## Notes
 - `AGENTS.md` governs both human and agent contributors here and takes precedence over generic conventions — notably: never `git add -A`/`.`, only stage files you changed, never `git reset --hard`/`checkout .`/`clean -fd`/`stash`, never force push, and never run the full vitest suite directly (use `./test.sh`).
+- Do not run `npm run build` or `npm test` unless Kody explicitly requests it.
 - Direct npm dependencies are pinned to exact versions (`save-exact=true`, `min-release-age=2` in `.npmrc`); `package-lock.json` is the dependency ground truth and pre-commit blocks accidental lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1`.
 - `packages/ai/src/models.generated.ts` must never be edited directly — update `packages/ai/scripts/generate-models.ts` and regenerate.
 - `test-analysis.md` at repo root is a working note (code-review-style test-gap analysis for commit `63a49969`), not permanent documentation.
