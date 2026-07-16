@@ -52,6 +52,9 @@ describe("ProjectTrustStore", () => {
 			mkdirSync(join(cwd, ".pi"), { recursive: true });
 			writeFileSync(join(cwd, ".pi", "settings.json"), "{}");
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
+			rmSync(join(cwd, ".pi", "settings.json"), { force: true });
+			writeFileSync(join(cwd, ".pi", "lsp.json"), "{}");
+			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
 
 			rmSync(join(cwd, ".pi"), { recursive: true, force: true });
 			mkdirSync(join(cwd, ".agents", "skills"), { recursive: true });
