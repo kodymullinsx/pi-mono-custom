@@ -2,7 +2,7 @@ import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { randomUUID } from "crypto";
 import {
-	appendFileSync,
+	chmodSync,
 	closeSync,
 	createReadStream,
 	existsSync,
@@ -11,7 +11,6 @@ import {
 	readdirSync,
 	readSync,
 	statSync,
-	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
 import { join, resolve } from "path";
@@ -26,6 +25,12 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import {
+	appendPrivateSessionEntry,
+	createPrivateSessionFile,
+	rewritePrivateSessionFile,
+	withLockedSessionFile,
+} from "./session-file-writer.ts";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -476,11 +481,20 @@ function getDefaultSessionDirPath(cwd: string, agentDir: string = getDefaultAgen
 	return join(resolvedAgentDir, "sessions", safePath);
 }
 
+const DEFAULT_SESSION_DIR_MODE = 0o700;
+
+function ensureSessionDir(sessionDir: string, isDefault: boolean): void {
+	if (!existsSync(sessionDir)) {
+		mkdirSync(sessionDir, { recursive: true, mode: isDefault ? DEFAULT_SESSION_DIR_MODE : undefined });
+	}
+	if (isDefault) {
+		chmodSync(sessionDir, DEFAULT_SESSION_DIR_MODE);
+	}
+}
+
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
 	const sessionDir = getDefaultSessionDirPath(cwd, agentDir);
-	if (!existsSync(sessionDir)) {
-		mkdirSync(sessionDir, { recursive: true });
-	}
+	ensureSessionDir(sessionDir, true);
 	return sessionDir;
 }
 
@@ -811,8 +825,8 @@ export class SessionManager {
 		this.cwd = resolvePath(cwd);
 		this.sessionDir = normalizePath(sessionDir);
 		this.persist = persist;
-		if (persist && this.sessionDir && !existsSync(this.sessionDir)) {
-			mkdirSync(this.sessionDir, { recursive: true });
+		if (persist && this.sessionDir) {
+			ensureSessionDir(this.sessionDir, this.sessionDir === getDefaultSessionDirPath(this.cwd));
 		}
 
 		if (sessionFile) {
@@ -824,37 +838,38 @@ export class SessionManager {
 
 	/** Switch to a different session file (used for resume and branching) */
 	setSessionFile(sessionFile: string): void {
-		this.sessionFile = resolvePath(sessionFile);
-		if (existsSync(this.sessionFile)) {
-			this.fileEntries = loadEntriesFromFile(this.sessionFile);
+		const resolvedSessionFile = resolvePath(sessionFile);
+		this.sessionFile = resolvedSessionFile;
+		if (existsSync(resolvedSessionFile)) {
+			withLockedSessionFile(resolvedSessionFile, (lockedSessionFile) => {
+				this.fileEntries = loadEntriesFromFile(resolvedSessionFile);
 
-			// If file was empty, initialize it with a valid session header. If it was
-			// non-empty but did not parse as a pi session, fail without modifying it.
-			if (this.fileEntries.length === 0) {
-				const explicitPath = this.sessionFile;
-				if (statSync(explicitPath).size > 0) {
-					throw new Error(`Session file is not a valid pi session: ${explicitPath}`);
+				// If file was empty, initialize it with a valid session header. If it was
+				// non-empty but did not parse as a pi session, fail without modifying it.
+				if (this.fileEntries.length === 0) {
+					if (statSync(resolvedSessionFile).size > 0) {
+						throw new Error(`Session file is not a valid pi session: ${resolvedSessionFile}`);
+					}
+					this.newSession();
+					this.sessionFile = resolvedSessionFile;
+					lockedSessionFile.rewrite(this.fileEntries);
+					this.flushed = true;
+					return;
 				}
-				this.newSession();
-				this.sessionFile = explicitPath;
-				this._rewriteFile();
+
+				const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
+				this.sessionId = header?.id ?? createSessionId();
+
+				if (migrateToCurrentVersion(this.fileEntries)) {
+					lockedSessionFile.rewrite(this.fileEntries);
+				}
+
+				this._buildIndex();
 				this.flushed = true;
-				return;
-			}
-
-			const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
-			this.sessionId = header?.id ?? createSessionId();
-
-			if (migrateToCurrentVersion(this.fileEntries)) {
-				this._rewriteFile();
-			}
-
-			this._buildIndex();
-			this.flushed = true;
+			});
 		} else {
-			const explicitPath = this.sessionFile;
 			this.newSession();
-			this.sessionFile = explicitPath; // preserve explicit path from --session flag
+			this.sessionFile = resolvedSessionFile; // preserve explicit path from --session flag
 		}
 	}
 
@@ -909,14 +924,7 @@ export class SessionManager {
 
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const fd = openSync(this.sessionFile, "w");
-		try {
-			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
-			}
-		} finally {
-			closeSync(fd);
-		}
+		rewritePrivateSessionFile(this.sessionFile, this.fileEntries);
 	}
 
 	isPersisted(): boolean {
@@ -949,7 +957,7 @@ export class SessionManager {
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
 			if (this.flushed) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+				appendPrivateSessionEntry(this.sessionFile, entry);
 			} else {
 				// Mark as not flushed so when assistant arrives, all entries get written
 				this.flushed = false;
@@ -958,17 +966,10 @@ export class SessionManager {
 		}
 
 		if (!this.flushed) {
-			const fd = openSync(this.sessionFile, "wx");
-			try {
-				for (const e of this.fileEntries) {
-					writeFileSync(fd, `${JSON.stringify(e)}\n`);
-				}
-			} finally {
-				closeSync(fd);
-			}
+			createPrivateSessionFile(this.sessionFile, this.fileEntries);
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			appendPrivateSessionEntry(this.sessionFile, entry);
 		}
 	}
 
@@ -1506,9 +1507,7 @@ export class SessionManager {
 		}
 
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(resolvedTargetCwd);
-		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
-		}
+		ensureSessionDir(dir, dir === getDefaultSessionDirPath(resolvedTargetCwd));
 
 		// Create new session file with new ID but forked content
 		if (options?.id !== undefined) {
@@ -1528,14 +1527,8 @@ export class SessionManager {
 			cwd: resolvedTargetCwd,
 			parentSession: resolvedSourcePath,
 		};
-		writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
-
-		// Copy all non-header entries from source
-		for (const entry of sourceEntries) {
-			if (entry.type !== "session") {
-				appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
-			}
-		}
+		const forkedEntries = sourceEntries.filter((entry) => entry.type !== "session");
+		createPrivateSessionFile(newSessionFile, [newHeader, ...forkedEntries]);
 
 		return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
 	}
