@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.ts";
-import { convertMessages } from "../src/providers/openai-completions.ts";
-import type {
-	AssistantMessage,
-	Context,
-	Model,
-	OpenAICompletionsCompat,
-	ToolResultMessage,
-	Usage,
-} from "../src/types.ts";
+import { convertMessages } from "../src/api/openai-completions.ts";
+import type { AssistantMessage, Context, Model, ToolResultMessage, Usage } from "../src/types.ts";
 import { AttachmentSerializationError, getAssistantErrorMetadata } from "../src/utils/document-utils.ts";
 
 const emptyUsage: Usage = {
@@ -20,7 +12,7 @@ const emptyUsage: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const compat: Required<OpenAICompletionsCompat> = {
+const compat: Parameters<typeof convertMessages>[2] = {
 	supportsStore: true,
 	supportsDeveloperRole: true,
 	supportsReasoningEffort: true,
@@ -39,16 +31,25 @@ const compat: Required<OpenAICompletionsCompat> = {
 	cacheControlFormat: "anthropic",
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: true,
+	chatTemplateKwargs: {},
+	deferredToolsMode: undefined,
+	sessionAffinityFormat: "openai",
 };
 
 function makeDocSupportingModel(): Model<"openai-completions"> {
-	const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
 	return {
-		...base,
+		id: "gpt-4o-mini",
+		name: "GPT-4o mini",
 		api: "openai-completions",
+		provider: "openai",
+		baseUrl: "https://api.openai.com/v1",
+		reasoning: false,
 		// Force documents into model.input so the transform layer does not pre-downgrade them.
 		// This exercises the serializer's throw path that propagates errorMetadata.
 		input: ["text", "image", "document"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 16384,
 	};
 }
 
@@ -153,10 +154,8 @@ describe("openai-completions document serialization", () => {
 	});
 
 	it("downgrades document blocks to text placeholders when model.input excludes documents", () => {
-		const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
 		const model: Model<"openai-completions"> = {
-			...base,
-			api: "openai-completions",
+			...makeDocSupportingModel(),
 			input: ["text", "image"], // no document support — should downgrade, not throw
 		};
 
@@ -185,10 +184,8 @@ describe("openai-completions document serialization", () => {
 
 describe("openai-completions image MIME sanitization", () => {
 	function makeImageOnlyModel(): Model<"openai-completions"> {
-		const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
 		return {
-			...base,
-			api: "openai-completions",
+			...makeDocSupportingModel(),
 			input: ["text", "image"],
 		};
 	}

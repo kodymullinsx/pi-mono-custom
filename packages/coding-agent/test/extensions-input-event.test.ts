@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { discoverAndLoadExtensions } from "../src/core/extensions/loader.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
-import { ModelRegistry } from "../src/core/model-registry.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+
+import { createModelRegistry } from "./model-runtime-test-utils.ts";
 
 describe("Input Event", () => {
 	let tempDir: string;
@@ -29,7 +30,7 @@ describe("Input Event", () => {
 		for (let i = 0; i < extensions.length; i++) fs.writeFileSync(path.join(extensionsDir, `e${i}.ts`), extensions[i]);
 		const result = await discoverAndLoadExtensions([], tempDir, tempDir);
 		const sm = SessionManager.inMemory();
-		const mr = ModelRegistry.create(AuthStorage.create(path.join(tempDir, "auth.json")));
+		const mr = await createModelRegistry(AuthStorage.create(path.join(tempDir, "auth.json")));
 		return new ExtensionRunner(result.extensions, result.runtime, tempDir, sm, mr);
 	}
 
@@ -44,16 +45,16 @@ describe("Input Event", () => {
 		expect((await r.emitInput("x", undefined, "interactive")).action).toBe("continue");
 	});
 
-	it("transforms text and preserves images when omitted", async () => {
+	it("transforms text and preserves attachments when omitted", async () => {
 		const r = await createRunner(
 			`export default p => p.on("input", async e => ({ action: "transform", text: "T:" + e.text }));`,
 		);
 		const imgs = [{ type: "image" as const, data: "orig", mimeType: "image/png" }];
 		const result = await r.emitInput("hi", imgs, "interactive");
-		expect(result).toEqual({ action: "transform", text: "T:hi", images: imgs });
+		expect(result).toEqual({ action: "transform", text: "T:hi", attachments: imgs });
 	});
 
-	it("transforms and replaces images when provided", async () => {
+	it("normalizes legacy image replacements to attachments", async () => {
 		const r = await createRunner(
 			`export default p => p.on("input", async () => ({ action: "transform", text: "X", images: [{ type: "image", data: "new", mimeType: "image/jpeg" }] }));`,
 		);
@@ -61,7 +62,7 @@ describe("Input Event", () => {
 		expect(result).toEqual({
 			action: "transform",
 			text: "X",
-			images: [{ type: "image", data: "new", mimeType: "image/jpeg" }],
+			attachments: [{ type: "image", data: "new", mimeType: "image/jpeg" }],
 		});
 	});
 
@@ -71,7 +72,7 @@ describe("Input Event", () => {
 			`export default p => p.on("input", async e => ({ action: "transform", text: e.text + "[2]" }));`,
 		);
 		const result = await r.emitInput("X", undefined, "interactive");
-		expect(result).toEqual({ action: "transform", text: "X[1][2]", images: undefined });
+		expect(result).toEqual({ action: "transform", text: "X[1][2]", attachments: undefined });
 	});
 
 	it("short-circuits on handled and skips subsequent handlers", async () => {

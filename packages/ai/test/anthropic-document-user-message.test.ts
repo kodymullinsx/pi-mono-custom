@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { streamSimple } from "../src/index.ts";
+import { streamSimple } from "../src/api/anthropic-messages.ts";
 import type { Context, Model } from "../src/types.ts";
 
 function makeModel(): Model<"anthropic-messages"> {
@@ -41,7 +41,7 @@ describe("Anthropic user document serialization", () => {
 
 		const stream = streamSimple(makeModel(), context, {
 			apiKey: "fake-key",
-			onPayload: (payload) => {
+			onPayload: (payload: unknown) => {
 				capturedPayload = payload as { messages: Array<{ content: unknown }> };
 				return payload;
 			},

@@ -40,7 +40,7 @@ describe("RpcClient attachments", () => {
 				type: "document" as const,
 				data: "JVBERi0xLjQK",
 				mimeType: "application/pdf",
-				name: "sample.pdf",
+				fileName: "sample.pdf",
 			},
 		];
 

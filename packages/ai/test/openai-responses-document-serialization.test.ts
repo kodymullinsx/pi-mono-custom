@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.ts";
-import { convertResponsesMessages } from "../src/providers/openai-responses-shared.ts";
+import { convertResponsesMessages } from "../src/api/openai-responses-shared.ts";
 import type { AssistantMessage, Context, Model, ToolResultMessage, Usage } from "../src/types.ts";
 import { AttachmentSerializationError, getAssistantErrorMetadata } from "../src/utils/document-utils.ts";
 
@@ -16,19 +15,23 @@ const emptyUsage: Usage = {
 };
 
 function makeDocSupportingResponsesModel(): Model<"openai-responses"> {
-	const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
 	return {
-		...base,
+		id: "gpt-4o-mini",
+		name: "GPT-4o mini",
 		api: "openai-responses",
+		provider: "openai",
+		baseUrl: "https://api.openai.com/v1",
+		reasoning: false,
 		input: ["text", "image", "document"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 16384,
 	};
 }
 
 function makeImageOnlyResponsesModel(): Model<"openai-responses"> {
-	const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
 	return {
-		...base,
-		api: "openai-responses",
+		...makeDocSupportingResponsesModel(),
 		input: ["text", "image"],
 	};
 }
@@ -134,10 +137,8 @@ describe("openai-responses-shared document serialization", () => {
 	});
 
 	it("downgrades document blocks to text placeholders when model.input excludes documents", () => {
-		const { compat: _compat, ...base } = getModel("openai", "gpt-4o-mini");
 		const model: Model<"openai-responses"> = {
-			...base,
-			api: "openai-responses",
+			...makeDocSupportingResponsesModel(),
 			input: ["text", "image"],
 		};
 
