@@ -1,18 +1,22 @@
 import type {
+	Api,
 	AssistantMessage,
 	AssistantMessageEvent,
+	AssistantMessageEventStream,
+	Context,
 	Message,
 	Model,
 	PromptContentBlock,
 	SimpleStreamOptions,
-	streamSimple,
 	Tool,
 	ToolResultMessage,
+	Usage,
 } from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "typebox";
 
 /**
- * Stream function used by the agent loop.
+ * Stream function used by the agent loop. `Models.streamSimple` satisfies
+ * this shape.
  *
  * Contract:
  * - Must not throw or return a rejected promise for request/model/runtime failures.
@@ -21,8 +25,10 @@ import type { Static, TSchema } from "typebox";
  *   final AssistantMessage with stopReason "error" or "aborted" and errorMessage.
  */
 export type StreamFn = (
-	...args: Parameters<typeof streamSimple>
-) => ReturnType<typeof streamSimple> | Promise<ReturnType<typeof streamSimple>>;
+	model: Model<Api>,
+	context: Context,
+	options?: SimpleStreamOptions,
+) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
 
 /**
  * Configuration for how tool calls from a single assistant message are executed.
@@ -63,16 +69,20 @@ export interface BeforeToolCallResult {
  * - `content`: if provided, replaces the tool result content array in full
  * - `details`: if provided, replaces the tool result details value in full
  * - `isError`: if provided, replaces the tool result error flag
+ * - `usage`: if provided, replaces the tool result usage
  * - `terminate`: if provided, replaces the early-termination hint
  *
  * Omitted fields keep the original executed tool result values.
- * There is no deep merge for `content` or `details`.
+ * There is no deep merge for `content`, `details`, or `usage`.
  */
 export interface AfterToolCallResult {
 	content?: PromptContentBlock[];
 	details?: unknown;
+	/** Supplemental messages emitted after the visible tool result and included in context. */
 	newMessages?: AgentMessage[];
 	isError?: boolean;
+	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
+	usage?: Usage;
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
@@ -268,6 +278,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * - `content` replaces the full content array
 	 * - `details` replaces the full details payload
 	 * - `isError` replaces the error flag
+	 * - `usage` replaces the tool result usage
 	 * - `terminate` replaces the early-termination hint
 	 *
 	 * Any omitted fields keep their original values. No deep merge is performed.
@@ -278,10 +289,10 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
 /**
  * Thinking/reasoning level for models that support it.
- * Note: "xhigh" is only supported by selected model families. Use model thinking-level metadata
- * from @earendil-works/pi-ai to detect support for a concrete model.
+ * Note: "xhigh" and "max" are only supported by selected model families. Use model
+ * thinking-level metadata from @earendil-works/pi-ai to detect support for a concrete model.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Extensible interface for custom app messages.
@@ -349,6 +360,10 @@ export interface AgentToolResult<T> {
 	details: T;
 	/** Supplemental messages emitted after the tool result and included in context. */
 	newMessages?: AgentMessage[];
+	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
+	usage?: Usage;
+	/** Names of tools introduced by this result and available from this transcript point onward. */
+	addedToolNames?: string[];
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
@@ -356,7 +371,12 @@ export interface AgentToolResult<T> {
 	terminate?: boolean;
 }
 
-/** Callback used by tools to stream partial execution updates. */
+/**
+ * Callback used by tools to stream partial execution updates.
+ *
+ * The callback is scoped to the current `execute()` invocation. Calls made after
+ * the tool promise settles are ignored.
+ */
 export type AgentToolUpdateCallback<T = any> = (partialResult: AgentToolResult<T>) => void;
 
 /** Tool definition used by the agent runtime. */

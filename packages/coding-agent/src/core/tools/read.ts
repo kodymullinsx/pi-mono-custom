@@ -8,6 +8,7 @@ import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.ts";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
+import { processImage } from "../../utils/image-process.ts";
 import {
 	clipImageCropRegion,
 	formatDimensionNote,
@@ -333,7 +334,18 @@ async function prepareInlineImageBlock(
 ): Promise<{ block?: ImageContent; dimensionNote?: string }> {
 	let knownDimensions: { width: number; height: number } | null | undefined;
 	let resolvedCrop: ImageCropRegion | undefined;
-	const inputBytes = Buffer.from(image.data, "base64");
+	const normalized = await processImage(Buffer.from(image.data, "base64"), image.mimeType, {
+		autoResizeImages: false,
+	});
+	if (!normalized.ok) {
+		throw new Error(normalized.message);
+	}
+	const normalizedImage: ImageContent = {
+		type: "image",
+		data: normalized.data,
+		mimeType: normalized.mimeType,
+	};
+	const inputBytes = Buffer.from(normalized.data, "base64");
 	if (options.region) {
 		knownDimensions = await getImageDimensions(inputBytes);
 		if (!knownDimensions) {
@@ -355,10 +367,14 @@ async function prepareInlineImageBlock(
 	}
 
 	if (!options.autoResize && !resolvedCrop) {
-		return { block: image };
+		return { block: normalizedImage };
 	}
 
-	const resized = await resizeImage(inputBytes, image.mimeType, resolvedCrop ? { crop: resolvedCrop } : undefined);
+	const resized = await resizeImage(
+		inputBytes,
+		normalizedImage.mimeType,
+		resolvedCrop ? { crop: resolvedCrop } : undefined,
+	);
 	if (!resized) {
 		const fallbackDimensions = knownDimensions ?? (await getImageDimensions(inputBytes));
 		if (!fallbackDimensions) {
@@ -497,7 +513,7 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files, images (jpg, png, gif, webp), and PDFs. Images and rendered PDF pages are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large text files, pages for large PDFs, and region or regionNorm for image/PDF crops.`,
+		description: `Read the contents of a file. Supports text files, images (jpg, png, gif, webp, bmp), and PDFs. Images and rendered PDF pages are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large text files, pages for large PDFs, and region or regionNorm for image/PDF crops.`,
 		promptSnippet: "Read file contents",
 		promptGuidelines: ["Use read to examine files instead of cat or sed."],
 		parameters: readSchema,

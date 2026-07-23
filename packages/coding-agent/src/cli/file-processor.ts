@@ -1,19 +1,21 @@
 /**
- * Process @file CLI arguments into text content and first-class attachments
+ * Process @file CLI arguments into text content and first-class attachments.
  */
 
 import { access, readFile, stat } from "node:fs/promises";
+import { basename, extname, resolve } from "node:path";
 import type { Api, AttachmentContent, ImageContent, Model } from "@earendil-works/pi-ai";
 import chalk from "chalk";
-import { basename, extname, resolve } from "path";
 import { resolveReadPath } from "../core/tools/path-utils.ts";
-import { formatDimensionNote, getImageDimensions, resizeImage } from "../utils/image-resize.ts";
+import { processImage } from "../utils/image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { getPDFPageCount, PDF_AT_MENTION_INLINE_THRESHOLD, renderPdfPagesToImageBlocks } from "../utils/pdf.ts";
 
 export interface ProcessedFiles {
 	text: string;
 	attachments: AttachmentContent[];
+	/** @deprecated use attachments */
+	images: ImageContent[];
 }
 
 export interface ProcessFileOptions {
@@ -40,11 +42,6 @@ function supportsImageInput(model?: Model<Api>): boolean {
 	return model?.input.includes("image") ?? false;
 }
 
-function buildPdfReferenceText(absolutePath: string, pageCount: number | null, reason: string): string {
-	const pageCountText = pageCount === null ? "an unknown number of pages" : `${pageCount} page(s)`;
-	return `<file name="${absolutePath}">[PDF referenced only: ${basename(absolutePath)} has ${pageCountText}. ${reason} Use the read tool with pages="1-5" to inspect specific ranges.]</file>\n`;
-}
-
 function formatPdfPageRange(firstPage: number, lastPage: number): string {
 	return firstPage === lastPage ? `${firstPage}` : `${firstPage}-${lastPage}`;
 }
@@ -53,12 +50,16 @@ function buildPdfContinuationNote(nextRange: string | undefined): string {
 	return nextRange ? ` Use the read tool with pages="${nextRange}" to continue.` : "";
 }
 
+function buildPdfReferenceText(absolutePath: string, pageCount: number | null, reason: string): string {
+	const pageCountText = pageCount === null ? "an unknown number of pages" : `${pageCount} page(s)`;
+	return `<file name="${absolutePath}">[PDF referenced only: ${basename(absolutePath)} has ${pageCountText}. ${reason} Use the read tool with pages="1-5" to inspect specific ranges.]</file>\n`;
+}
+
 async function processPdfFile(
 	absolutePath: string,
 	options: { autoResizeImages: boolean; model?: Model<Api>; mtimeMs?: number },
 ): Promise<ProcessedFiles> {
 	const pageCount = await getPDFPageCount(absolutePath);
-
 	if (!supportsImageInput(options.model)) {
 		return {
 			text: buildPdfReferenceText(
@@ -67,6 +68,7 @@ async function processPdfFile(
 				"The current model does not support inline PDF rendering in this path.",
 			),
 			attachments: [],
+			images: [],
 		};
 	}
 
@@ -93,64 +95,47 @@ async function processPdfFile(
 		const totalSuffix = pageCount === null ? " Total page count unavailable." : ` of ${pageCount}.`;
 		console.error(chalk.yellow(`Warning: PDF pages ${requestedRange} omitted (exceeds size limit): ${absolutePath}`));
 		return {
-			text:
-				`<file name="${absolutePath}">[` +
-				`PDF pages ${requestedRange}${totalSuffix} could not be attached as images because they could not be resized below the inline image size limit.` +
-				`${buildPdfContinuationNote(nextRange)}` +
-				`]</file>\n`,
+			text: `<file name="${absolutePath}">[PDF pages ${requestedRange}${totalSuffix} could not be attached as images because they could not be resized below the inline image size limit.${buildPdfContinuationNote(nextRange)}]</file>\n`,
 			attachments: [],
+			images: [],
 		};
 	}
 
 	if (pageCount === null) {
 		const attachedRange = formatPdfPageRange(firstPage, firstPage + attachments.length - 1);
 		return {
-			text:
-				`<file name="${absolutePath}">[` +
-				`PDF pages ${attachedRange} attached as images from ${basename(absolutePath)}. Total page count unavailable.` +
-				`${buildPdfContinuationNote(nextRange)}` +
-				`]</file>\n`,
+			text: `<file name="${absolutePath}">[PDF pages ${attachedRange} attached as images from ${basename(absolutePath)}. Total page count unavailable.${buildPdfContinuationNote(nextRange)}]</file>\n`,
 			attachments,
+			images: attachments,
 		};
 	}
 
 	if (attachments.length < requestedPageCount) {
 		const requestedRange = formatPdfPageRange(firstPage, lastPage);
 		return {
-			text:
-				`<file name="${absolutePath}">[` +
-				`Only ${attachments.length} of ${requestedPageCount} PDF page(s) from ${basename(absolutePath)} ` +
-				`in pages ${requestedRange}${pageCount ? ` of ${pageCount}` : ""} could be attached as images. Remaining page(s) were omitted because they could not be resized below the inline image size limit.` +
-				`${buildPdfContinuationNote(nextRange)}` +
-				`]</file>\n`,
+			text: `<file name="${absolutePath}">[Only ${attachments.length} of ${requestedPageCount} PDF page(s) from ${basename(absolutePath)} in pages ${requestedRange} of ${pageCount} could be attached as images. Remaining page(s) were omitted because they could not be resized below the inline image size limit.${buildPdfContinuationNote(nextRange)}]</file>\n`,
 			attachments,
+			images: attachments,
 		};
 	}
 
 	const attachedRange = formatPdfPageRange(firstPage, lastPage);
 	const totalSuffix = pageCount > PDF_AT_MENTION_INLINE_THRESHOLD ? ` of ${pageCount}` : "";
 	return {
-		text:
-			`<file name="${absolutePath}">[` +
-			`PDF pages ${attachedRange}${totalSuffix} attached as images from ${basename(absolutePath)}.` +
-			`${pageCount > PDF_AT_MENTION_INLINE_THRESHOLD ? " Auto-attached first range." : ""}` +
-			`${buildPdfContinuationNote(nextRange)}` +
-			`]</file>\n`,
+		text: `<file name="${absolutePath}">[PDF pages ${attachedRange}${totalSuffix} attached as images from ${basename(absolutePath)}.${pageCount > PDF_AT_MENTION_INLINE_THRESHOLD ? " Auto-attached first range." : ""}${buildPdfContinuationNote(nextRange)}]</file>\n`,
 		attachments,
+		images: attachments,
 	};
 }
 
-/** Process @file arguments into text content and first-class attachments */
+/** Process @file arguments into text content and first-class attachments. */
 export async function processFileArguments(fileArgs: string[], options?: ProcessFileOptions): Promise<ProcessedFiles> {
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	let text = "";
 	const attachments: AttachmentContent[] = [];
 
 	for (const fileArg of fileArgs) {
-		// Expand and resolve path (handles ~ expansion and macOS screenshot Unicode spaces)
 		const absolutePath = resolve(resolveReadPath(fileArg, process.cwd()));
-
-		// Check if file exists
 		try {
 			await access(absolutePath);
 		} catch {
@@ -158,7 +143,6 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 			process.exit(1);
 		}
 
-		// Check if file is empty
 		const stats = await stat(absolutePath);
 		if (stats.size === 0) {
 			text += `<file name="${absolutePath}">[File is empty.]</file>\n`;
@@ -166,49 +150,21 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		}
 
 		const mimeType = await detectSupportedImageMimeTypeFromFile(absolutePath);
-
 		if (mimeType) {
-			// Handle image file
 			const content = await readFile(absolutePath);
-
-			let attachment: ImageContent;
-			let dimensionNote: string | undefined;
-
-			if (autoResizeImages) {
-				const resized = await resizeImage(content, mimeType);
-				if (!resized) {
-					const dimensions = await getImageDimensions(content);
-					if (!dimensions) {
-						console.error(chalk.yellow(`Warning: Image omitted (could not process): ${absolutePath}`));
-						text += `<file name="${absolutePath}">[Image omitted: Pi could not process this image for inline attachment.]</file>\n`;
-						continue;
-					}
-					console.error(chalk.yellow(`Warning: Image omitted (exceeds size limit): ${absolutePath}`));
-					text += `<file name="${absolutePath}">[Image omitted: could not be resized below the inline image size limit.]</file>\n`;
-					continue;
-				}
-				dimensionNote = formatDimensionNote(resized);
-				attachment = {
-					type: "image",
-					mimeType: resized.mimeType,
-					data: resized.data,
-				};
-			} else {
-				attachment = {
-					type: "image",
-					mimeType,
-					data: content.toString("base64"),
-				};
+			const processed = await processImage(content, mimeType, { autoResizeImages });
+			if (!processed.ok) {
+				text += `<file name="${absolutePath}">${processed.message}</file>\n`;
+				continue;
 			}
 
+			const attachment: ImageContent = {
+				type: "image",
+				mimeType: processed.mimeType,
+				data: processed.data,
+			};
 			attachments.push(attachment);
-
-			// Add text reference to image with optional dimension note
-			if (dimensionNote) {
-				text += `<file name="${absolutePath}">${dimensionNote}</file>\n`;
-			} else {
-				text += `<file name="${absolutePath}"></file>\n`;
-			}
+			text += `<file name="${absolutePath}">${processed.hints.join("\n")}</file>\n`;
 			continue;
 		}
 
@@ -229,7 +185,6 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 			continue;
 		}
 
-		// Handle text file
 		try {
 			const content = await readFile(absolutePath, "utf-8");
 			text += `<file name="${absolutePath}">\n${content}\n</file>\n`;
@@ -240,5 +195,9 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		}
 	}
 
-	return { text, attachments };
+	return {
+		text,
+		attachments,
+		images: attachments.filter((attachment): attachment is ImageContent => attachment.type === "image"),
+	};
 }
