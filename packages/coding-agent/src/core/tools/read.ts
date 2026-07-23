@@ -331,7 +331,7 @@ async function prepareInlineImageBlock(
 		regionNorm?: NormalizedReadRegion;
 		includeDimensionNote?: boolean;
 	},
-): Promise<{ block?: ImageContent; dimensionNote?: string }> {
+): Promise<{ block?: ImageContent; hints?: string[]; dimensionNote?: string }> {
 	let knownDimensions: { width: number; height: number } | null | undefined;
 	let resolvedCrop: ImageCropRegion | undefined;
 	const normalized = await processImage(Buffer.from(image.data, "base64"), image.mimeType, {
@@ -367,7 +367,7 @@ async function prepareInlineImageBlock(
 	}
 
 	if (!options.autoResize && !resolvedCrop) {
-		return { block: normalizedImage };
+		return { block: normalizedImage, hints: normalized.hints };
 	}
 
 	const resized = await resizeImage(
@@ -389,6 +389,7 @@ async function prepareInlineImageBlock(
 			data: resized.data,
 			mimeType: resized.mimeType,
 		},
+		hints: normalized.hints,
 		dimensionNote: formatDimensionNote(resized, {
 			includeOriginalDimensions: options.includeDimensionNote,
 		}),
@@ -480,7 +481,7 @@ function formatReadResult(
 
 	const rawPath = str(args?.file_path ?? args?.path);
 	const output = getTextOutput(result, showImages);
-	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+	const lang = !isError && rawPath ? getLanguageFromPath(rawPath) : undefined;
 	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
 	const lines = trimTrailingEmptyLines(renderedLines);
 	const maxLines = options.expanded ? lines.length : 10;
@@ -752,6 +753,7 @@ export function createReadToolDefinition(
 										content = [{ type: "text", text: textNote }];
 									} else {
 										let textNote = `Read image file [${preparedBlock.block.mimeType}]`;
+										if (preparedBlock.hints?.length) textNote += `\n${preparedBlock.hints.join("\n")}`;
 										if (preparedBlock.dimensionNote) textNote += `\n${preparedBlock.dimensionNote}`;
 										textNote += `\n${buildImageCropGuidance()}`;
 										if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
