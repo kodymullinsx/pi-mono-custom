@@ -12,7 +12,7 @@ Personal fork of [badlogic/pi-mono](https://github.com/badlogic/pi-mono) — the
 - `origin` → `https://github.com/kodymullinsx/pi-mono-custom.git` (this fork)
 - `upstream` → `https://github.com/badlogic/pi-mono.git` (source project)
 
-Current branch `upgrade/first-class-pdf-image-v0791` sits a handful of commits ahead of `upstream/main` (merge-base `28df940f`), e.g. `feat(coding-agent): add first-class attachment ingestion`, `fix(ai): support disabling native tool schemas`, plus local doc/skill-guidance commits. Check `git log upstream/main..HEAD` for the current delta before assuming a commit is upstream vs local.
+Before making provenance or local-delta claims, run `git branch --show-current` and `git log --oneline upstream/main..HEAD`; do not rely on a fixed branch name, merge base, or commit count.
 
 ## Structure
 - `packages/ai` — unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.)

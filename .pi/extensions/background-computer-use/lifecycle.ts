@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { RuntimeStatus } from "./client.ts";
 import { BcuClient } from "./client.ts";
-import { type BcuExtensionConfig, loadConfig } from "./config.ts";
+import { BCU_ENV, type BcuExtensionConfig, loadConfig } from "./config.ts";
 import { textResult } from "./results.ts";
 
 const APP_PROCESS_NAME = "BackgroundComputerUse";
@@ -202,7 +202,11 @@ async function startInstalledApp(
 		};
 	}
 
-	const command = await runner("open", [resolvedAppPath], {
+	const openArguments: string[] = [];
+	if (config.enableObservation) openArguments.push("--env", `${BCU_ENV.enableObservation}=1`);
+	if (config.enableActions) openArguments.push("--env", `${BCU_ENV.enableActions}=1`);
+	openArguments.push(resolvedAppPath);
+	const command = await runner("open", openArguments, {
 		timeoutMs: Math.min(config.startTimeoutMs, 10_000),
 		signal: options.signal,
 	});

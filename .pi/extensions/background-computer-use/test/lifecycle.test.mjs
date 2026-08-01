@@ -37,6 +37,7 @@ function config(repoPath, appPath) {
 		timeoutMs: 1000,
 		startTimeoutMs: 5000,
 		debug: false,
+		enableObservation: false,
 		enableActions: false,
 		autoStart: false,
 		repoPath,
@@ -133,8 +134,32 @@ test("installed app startup opens the app and skips source checkout scripts", as
 
 		assert.equal(result.ok, true);
 		assert.equal(result.startMethod, "installed_app");
-		assert.equal(runner.calls.some((call) => call.command === "open" && call.args[0] === appPath), true);
+		assert.equal(runner.calls.some((call) => call.command === "open" && call.args.at(-1) === appPath), true);
 		assert.equal(runner.calls.some((call) => call.command === "bash"), false);
+	});
+});
+
+test("installed app startup forwards only explicitly enabled runtime capabilities", async () => {
+	await withTempDir(async (root) => {
+		const repoPath = await createRepo(root);
+		const appPath = await createApp(root);
+		const enabledConfig = { ...config(repoPath, appPath), enableObservation: true, enableActions: true };
+		const runner = runnerWith({ open: { exitCode: 0, stdout: "", stderr: "", timedOut: false } });
+
+		const result = await startBackgroundComputerUse(enabledConfig, {
+			client: clientWith([status(false), status(false), status(true)]),
+			runner,
+		});
+
+		assert.equal(result.ok, true);
+		const openCall = runner.calls.find((call) => call.command === "open");
+		assert.deepEqual(openCall.args, [
+			"--env",
+			"BCU_ENABLE_OBSERVATION=1",
+			"--env",
+			"BCU_ENABLE_ACTIONS=1",
+			appPath,
+		]);
 	});
 });
 

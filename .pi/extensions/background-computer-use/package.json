@@ -11,27 +11,31 @@
   },
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.mjs",
-    "typecheck": "tsgo --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "check": "npm run typecheck && npm test"
   },
   "peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-agent-core": "*",
-		"@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "peerDependenciesMeta": {
-		"@earendil-works/pi-coding-agent": {
+    "@earendil-works/pi-coding-agent": {
       "optional": true
     },
-		"@earendil-works/pi-agent-core": {
+    "@earendil-works/pi-agent-core": {
       "optional": true
     },
-		"@earendil-works/pi-ai": {
+    "@earendil-works/pi-ai": {
       "optional": true
     },
     "typebox": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.2"
   }
 }

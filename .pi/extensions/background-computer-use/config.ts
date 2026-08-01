@@ -5,6 +5,7 @@ export const BCU_ENV = {
 	manifestPath: "BCU_MANIFEST_PATH",
 	timeoutMs: "BCU_TIMEOUT_MS",
 	debug: "BCU_DEBUG",
+	enableObservation: "BCU_ENABLE_OBSERVATION",
 	enableActions: "BCU_ENABLE_ACTIONS",
 	autoStart: "BCU_AUTO_START",
 	repoPath: "BCU_REPO_PATH",
@@ -12,13 +13,15 @@ export const BCU_ENV = {
 	startTimeoutMs: "BCU_START_TIMEOUT_MS",
 	actionLockPath: "BCU_ACTION_LOCK_PATH",
 	actionLockTtlMs: "BCU_ACTION_LOCK_TTL_MS",
+	stateTokenTtlMs: "BCU_STATE_TOKEN_TTL_MS",
 } as const;
 
-export const SUPPORTED_CONTRACT_VERSION = "2026-04-20-window-motion-runtime";
+export const SUPPORTED_CONTRACT_VERSION = "2026-07-18-authenticated-runtime-v1";
 export const DEFAULT_TIMEOUT_MS = 5_000;
 export const DEFAULT_START_TIMEOUT_MS = 60_000;
 export const DEFAULT_MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 export const DEFAULT_ACTION_LOCK_TTL_MS = 30_000;
+export const DEFAULT_STATE_TOKEN_TTL_MS = 60_000;
 
 export const REQUIRED_PHASE1_ROUTES = [
 	{ id: "health", method: "GET", path: "/health" },
@@ -35,6 +38,7 @@ export interface BcuExtensionConfig {
 	timeoutMs: number;
 	startTimeoutMs: number;
 	debug: boolean;
+	enableObservation: boolean;
 	enableActions: boolean;
 	autoStart: boolean;
 	repoPath?: string;
@@ -42,6 +46,7 @@ export interface BcuExtensionConfig {
 	maxImageBytes: number;
 	actionLockPath: string;
 	actionLockTtlMs: number;
+	stateTokenTtlMs: number;
 }
 
 function tmpRoot(env: NodeJS.ProcessEnv = process.env): string {
@@ -98,8 +103,12 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
 	return parsed;
 }
 
-function flagEnabled(value: string | undefined): boolean {
-	return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
+function flagValue(value: string | undefined, fallback: boolean): boolean {
+	if (value === undefined) return fallback;
+	const normalized = value.toLowerCase();
+	if (value === "1" || normalized === "true" || normalized === "yes") return true;
+	if (value === "0" || normalized === "false" || normalized === "no") return false;
+	return fallback;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BcuExtensionConfig {
@@ -108,13 +117,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BcuExtensionCo
 		manifestCandidatePaths: manifestCandidatePaths(env),
 		timeoutMs: parsePositiveInteger(env[BCU_ENV.timeoutMs], DEFAULT_TIMEOUT_MS),
 		startTimeoutMs: parsePositiveInteger(env[BCU_ENV.startTimeoutMs], DEFAULT_START_TIMEOUT_MS),
-		debug: flagEnabled(env[BCU_ENV.debug]),
-		enableActions: flagEnabled(env[BCU_ENV.enableActions]),
-		autoStart: flagEnabled(env[BCU_ENV.autoStart]),
+		debug: flagValue(env[BCU_ENV.debug], false),
+		enableObservation: flagValue(env[BCU_ENV.enableObservation], true),
+		enableActions: flagValue(env[BCU_ENV.enableActions], true),
+		autoStart: flagValue(env[BCU_ENV.autoStart], false),
 		repoPath: env[BCU_ENV.repoPath] || defaultRepoPath(env),
 		appPath: env[BCU_ENV.appPath] || defaultAppPath(env),
 		maxImageBytes: DEFAULT_MAX_IMAGE_BYTES,
 		actionLockPath: env[BCU_ENV.actionLockPath] || defaultActionLockPath(env),
 		actionLockTtlMs: parsePositiveInteger(env[BCU_ENV.actionLockTtlMs], DEFAULT_ACTION_LOCK_TTL_MS),
+		stateTokenTtlMs: parsePositiveInteger(env[BCU_ENV.stateTokenTtlMs], DEFAULT_STATE_TOKEN_TTL_MS),
 	};
 }

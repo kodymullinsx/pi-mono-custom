@@ -1,5 +1,15 @@
 import fs from "node:fs/promises";
-import { REQUIRED_PHASE1_ROUTES, SUPPORTED_CONTRACT_VERSION, type BcuExtensionConfig, loadConfig } from "./config.ts";
+import { constants as fsConstants } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+	DEFAULT_MAX_IMAGE_BYTES,
+	REQUIRED_PHASE1_ROUTES,
+	SUPPORTED_CONTRACT_VERSION,
+	type BcuExtensionConfig,
+	loadConfig,
+} from "./config.ts";
+import { resolveTrustedFilePath } from "./safeFiles.ts";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -34,7 +44,13 @@ export interface BcuRouteSummary {
 export interface RuntimeManifest {
 	contractVersion: string;
 	baseURL: string;
-	startedAt?: string;
+	instanceID: string;
+	authorizationToken: string;
+	capabilities: {
+		observe: boolean;
+		action: boolean;
+	};
+	startedAt: string;
 	permissions?: RuntimePermissions;
 	instructions?: BootstrapInstructions;
 	routes: BcuRouteSummary[];
@@ -44,6 +60,7 @@ export interface BootstrapResponse extends JsonObject {
 	contractVersion: string;
 	baseURL?: string | null;
 	startedAt?: string | null;
+	instanceID?: string | null;
 	permissions: RuntimePermissions;
 	instructions: BootstrapInstructions;
 	routes: BcuRouteSummary[];
@@ -63,6 +80,7 @@ export type BcuClientErrorCode =
 	| "connection_refused"
 	| "network_error"
 	| "non_json_response"
+	| "response_too_large"
 	| "http_error"
 	| "api_error"
 	| "unsupported_contract"
@@ -219,17 +237,42 @@ export function parseRuntimeManifest(value: unknown): RuntimeManifest {
 
 	const contractVersion = readString(value, "contractVersion");
 	const baseURL = readString(value, "baseURL");
+	const startedAt = readString(value, "startedAt");
+	const instanceID = readString(value, "instanceID");
+	const authorizationToken = readString(value, "authorizationToken");
+	const capabilities = isObject(value.capabilities) ? value.capabilities : undefined;
 	if (!contractVersion) {
 		throw new BcuClientError("manifest_invalid", "BackgroundComputerUse runtime manifest is missing contractVersion.");
 	}
 	if (!baseURL) {
 		throw new BcuClientError("manifest_invalid", "BackgroundComputerUse runtime manifest is missing baseURL.");
 	}
+	if (!startedAt || !Number.isFinite(Date.parse(startedAt))) {
+		throw new BcuClientError("manifest_invalid", "BackgroundComputerUse runtime manifest is missing a valid startedAt launch identity.");
+	}
+	if (contractVersion !== SUPPORTED_CONTRACT_VERSION) {
+		throw new BcuClientError(
+			"unsupported_contract",
+			`Unsupported BackgroundComputerUse contract ${contractVersion}; supported contract is ${SUPPORTED_CONTRACT_VERSION}.`,
+		);
+	}
+	if (!instanceID?.trim()) {
+		throw new BcuClientError("manifest_invalid", "BackgroundComputerUse runtime manifest is missing instanceID.");
+	}
+	if (!authorizationToken?.trim()) {
+		throw new BcuClientError("manifest_invalid", "BackgroundComputerUse runtime manifest is missing authorizationToken.");
+	}
+	if (!capabilities || typeof capabilities.observe !== "boolean" || typeof capabilities.action !== "boolean") {
+		throw new BcuClientError("manifest_invalid", "BackgroundComputerUse runtime manifest is missing boolean observe/action capabilities.");
+	}
 
 	return {
 		contractVersion,
 		baseURL: validateBaseURL(baseURL),
-		startedAt: readString(value, "startedAt"),
+		instanceID,
+		authorizationToken,
+		capabilities: { observe: capabilities.observe, action: capabilities.action },
+		startedAt,
 		permissions: parsePermissions(value.permissions),
 		instructions: parseInstructions(value.instructions),
 		routes: parseRoutes(value.routes),
@@ -250,6 +293,7 @@ export function parseBootstrapResponse(value: unknown): BootstrapResponse {
 		...value,
 		contractVersion,
 		baseURL: readString(value, "baseURL") ?? null,
+		instanceID: readString(value, "instanceID") ?? null,
 		permissions,
 		instructions,
 		routes: parseRoutes(value.routes),
@@ -300,21 +344,56 @@ function classifyFetchError(error: unknown, timedOut: boolean): BcuClientError {
 	return new BcuClientError("network_error", error instanceof Error ? error.message : String(error), { cause: error });
 }
 
+export const MAX_RESPONSE_BODY_BYTES = Math.ceil(DEFAULT_MAX_IMAGE_BYTES / 3) * 4 + 2 * 1024 * 1024;
+
 async function readJsonResponse(response: Response): Promise<unknown> {
-	const text = await response.text();
+	const chunks: Uint8Array[] = [];
+	let byteCount = 0;
+	if (response.body) {
+		const reader = response.body.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				byteCount += value.byteLength;
+				if (byteCount > MAX_RESPONSE_BODY_BYTES) {
+					await reader.cancel();
+					throw new BcuClientError("response_too_large", "BackgroundComputerUse response exceeded the adapter byte limit.", {
+						status: response.status,
+					});
+				}
+				chunks.push(value);
+			}
+		} finally {
+			reader.releaseLock();
+		}
+	}
+	const text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 	if (text.trim().length === 0) return {};
 	try {
 		return JSON.parse(text) as unknown;
 	} catch (error) {
-		throw new BcuClientError("non_json_response", `Expected JSON response from BackgroundComputerUse, got ${text.slice(0, 120)}`, {
+		throw new BcuClientError("non_json_response", "Expected a valid JSON response from BackgroundComputerUse; response bytes were omitted.", {
 			status: response.status,
 			cause: error,
 		});
 	}
 }
 
+function redactCredential(value: unknown, credential: string): unknown {
+	if (typeof value === "string") return value.split(credential).join("[redacted credential]");
+	if (Array.isArray(value)) return value.map((item) => redactCredential(item, credential));
+	if (isObject(value)) {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entryValue]) => [key, redactCredential(entryValue, credential)]),
+		);
+	}
+	return value;
+}
+
 export class BcuClient {
 	private readonly config: BcuExtensionConfig;
+	private pinnedManifestLookup: ManifestLookupResult | undefined;
 
 	constructor(config: BcuExtensionConfig = loadConfig()) {
 		this.config = config;
@@ -340,7 +419,18 @@ export class BcuClient {
 		return recovery;
 	}
 
-	async readManifestWithMetadata(): Promise<ManifestLookupResult> {
+	private manifestTrustAnchor(candidatePath: string): string {
+		const candidate = path.resolve(candidatePath);
+		const configuredTempRoot = path.resolve((process.env.TMPDIR ?? os.tmpdir()).replace(/\/+$/, ""));
+		const tempRoots = [configuredTempRoot];
+		if (path.basename(configuredTempRoot) === "com.apple.shortcuts.mac-helper") tempRoots.push(path.dirname(configuredTempRoot));
+		const matchingTempRoot = tempRoots
+			.filter((root) => candidate === root || candidate.startsWith(`${root}${path.sep}`))
+			.sort((left, right) => right.length - left.length)[0];
+		return matchingTempRoot ?? path.parse(candidate).root;
+	}
+
+	private async discoverManifestWithMetadata(): Promise<ManifestLookupResult> {
 		const candidatePaths = this.manifestCandidates();
 		const parseErrors: BcuClientError[] = [];
 		const missingErrors: unknown[] = [];
@@ -348,9 +438,39 @@ export class BcuClient {
 		for (const candidatePath of candidatePaths) {
 			let raw: string;
 			try {
-				raw = await fs.readFile(candidatePath, "utf8");
+				const resolvedPath = await resolveTrustedFilePath(
+					this.manifestTrustAnchor(candidatePath),
+					path.dirname(path.resolve(candidatePath)),
+					candidatePath,
+				);
+				const handle = await fs.open(resolvedPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+				try {
+					const stat = await handle.stat();
+					const expectedUid = process.getuid?.();
+					if (!stat.isFile() || stat.size <= 0 || stat.size > 1024 * 1024) {
+						throw new BcuClientError("manifest_invalid", `BackgroundComputerUse manifest ${candidatePath} is not a bounded regular file.`);
+					}
+					if (expectedUid !== undefined && stat.uid !== expectedUid) {
+						throw new BcuClientError("manifest_invalid", `BackgroundComputerUse manifest ${candidatePath} is not owned by the current user.`);
+					}
+					if ((stat.mode & 0o077) !== 0) {
+						throw new BcuClientError("manifest_invalid", `BackgroundComputerUse manifest ${candidatePath} must be owner-only (mode 0600).`);
+					}
+					raw = await handle.readFile("utf8");
+				} finally {
+					await handle.close();
+				}
 			} catch (error) {
-				missingErrors.push(error);
+				const code = isObject(error) && typeof error.code === "string" ? error.code : undefined;
+				if (code === "ENOENT" || code === "ENOTDIR") missingErrors.push(error);
+				else if (error instanceof BcuClientError) parseErrors.push(error);
+				else {
+					parseErrors.push(
+						new BcuClientError("manifest_invalid", `BackgroundComputerUse manifest ${candidatePath} was rejected because a parent or resolved path was outside its trusted manifest directory.`, {
+							cause: error,
+						}),
+					);
+				}
 				continue;
 			}
 
@@ -402,6 +522,11 @@ export class BcuClient {
 		);
 	}
 
+	async readManifestWithMetadata(): Promise<ManifestLookupResult> {
+		if (!this.pinnedManifestLookup) this.pinnedManifestLookup = await this.discoverManifestWithMetadata();
+		return this.pinnedManifestLookup;
+	}
+
 	async readManifest(): Promise<RuntimeManifest> {
 		return (await this.readManifestWithMetadata()).manifest;
 	}
@@ -411,11 +536,11 @@ export class BcuClient {
 		options: { method?: "GET" | "POST"; body?: JsonObject; signal?: AbortSignal; allowOkFalse?: boolean } = {},
 	) {
 		const manifest = await this.readManifest();
-		return this.requestJSONWithBaseURL(manifest.baseURL, pathname, options);
+		return this.requestJSONWithManifest(manifest, pathname, options);
 	}
 
-	async requestJSONWithBaseURL(
-		baseURL: string,
+	private async requestJSONWithManifest(
+		manifest: RuntimeManifest,
 		pathname: string,
 		options: { method?: "GET" | "POST"; body?: JsonObject; signal?: AbortSignal; allowOkFalse?: boolean } = {},
 	): Promise<unknown> {
@@ -429,14 +554,19 @@ export class BcuClient {
 		options.signal?.addEventListener("abort", onAbort, { once: true });
 
 		try {
-			const url = new URL(pathname, `${baseURL}/`);
+			const url = new URL(pathname, `${manifest.baseURL}/`);
+			const headers: Record<string, string> = {
+				Authorization: `Bearer ${manifest.authorizationToken}`,
+				"X-BCU-Instance-ID": manifest.instanceID,
+			};
+			if (options.body) headers["content-type"] = "application/json";
 			const response = await fetch(url, {
 				method: options.method ?? "GET",
-				headers: options.body ? { "content-type": "application/json" } : undefined,
+				headers,
 				body: options.body ? JSON.stringify(options.body) : undefined,
 				signal: controller.signal,
 			});
-			const data = await readJsonResponse(response);
+			const data = redactCredential(await readJsonResponse(response), manifest.authorizationToken);
 
 			if (!response.ok) {
 				const body = isObject(data) ? data : {};
@@ -575,15 +705,35 @@ export class BcuClient {
 
 	async assertPhase1Ready(signal?: AbortSignal): Promise<{ manifest: RuntimeManifest; bootstrap: BootstrapResponse; routes: RouteCatalogResponse }> {
 		const manifest = await this.readManifest();
-		const bootstrap = await this.getBootstrap(signal);
-		const routes = await this.getRoutes(signal);
-		const contractVersion = routes.contractVersion || bootstrap.contractVersion || manifest.contractVersion;
-		if (!isSupportedContract(contractVersion)) {
+		const [health, bootstrap, routes] = await Promise.all([
+			this.getHealth(signal),
+			this.getBootstrap(signal),
+			this.getRoutes(signal),
+		]);
+		const healthContract = readString(health, "contractVersion");
+		const versions = [manifest.contractVersion, bootstrap.contractVersion, routes.contractVersion, healthContract];
+		if (versions.some((version) => version !== SUPPORTED_CONTRACT_VERSION)) {
 			throw new BcuClientError(
 				"unsupported_contract",
-				`Unsupported BackgroundComputerUse contract ${contractVersion}; supported contract is ${SUPPORTED_CONTRACT_VERSION}.`,
-				{ details: { contractVersion, supportedContractVersion: SUPPORTED_CONTRACT_VERSION } },
+				`BackgroundComputerUse discovery responses did not all use ${SUPPORTED_CONTRACT_VERSION}.`,
+				{ details: { versions, supportedContractVersion: SUPPORTED_CONTRACT_VERSION } },
 			);
+		}
+		if (
+			bootstrap.baseURL !== manifest.baseURL ||
+			bootstrap.startedAt !== manifest.startedAt ||
+			bootstrap.instanceID !== manifest.instanceID
+		) {
+			throw new BcuClientError("manifest_invalid", "BackgroundComputerUse bootstrap identity did not match the pinned manifest.", {
+				details: {
+					manifestBaseURL: manifest.baseURL,
+					bootstrapBaseURL: bootstrap.baseURL,
+					manifestStartedAt: manifest.startedAt,
+					bootstrapStartedAt: bootstrap.startedAt,
+					manifestInstanceID: manifest.instanceID,
+					bootstrapInstanceID: bootstrap.instanceID,
+				},
+			});
 		}
 		const missingRoutes = findMissingPhase1Routes(routes.routes.length ? routes.routes : manifest.routes);
 		if (missingRoutes.length > 0) {

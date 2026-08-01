@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { BcuClient, BcuClientError } from "../client.ts";
+import { BcuClient, BcuClientError, MAX_RESPONSE_BODY_BYTES } from "../client.ts";
+import { errorResult } from "../results.ts";
 import { defaultActionLockPath, manifestCandidatePaths, REQUIRED_PHASE1_ROUTES, SUPPORTED_CONTRACT_VERSION } from "../config.ts";
+import { resolveTrustedFilePath } from "../safeFiles.ts";
 
 async function withTempDir(fn) {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "bcu-client-"));
@@ -63,6 +65,9 @@ function bootstrap(baseURL, overrides = {}) {
 	return {
 		contractVersion: SUPPORTED_CONTRACT_VERSION,
 		baseURL,
+		instanceID: "test-instance",
+		authorizationToken: "test-authorization-token",
+		capabilities: { observe: true, action: true },
 		startedAt: "2026-04-25T01:00:00Z",
 		permissions: {
 			accessibility: { granted: true, promptable: true },
@@ -84,6 +89,7 @@ async function writeManifest(root, baseURL, overrides = {}) {
 			...bootstrap(baseURL),
 			...overrides,
 		}),
+		{ mode: 0o600 },
 	);
 	return manifestPath;
 }
@@ -95,12 +101,14 @@ function client(manifestPath, timeoutMs = 1000, manifestCandidatePaths = [manife
 		timeoutMs,
 		startTimeoutMs: 5000,
 		debug: false,
+		enableObservation: false,
 		enableActions: false,
 		autoStart: false,
 		appPath: "/Users/kodymullins/Applications/BackgroundComputerUse.app",
 		maxImageBytes: 1024 * 1024,
 		actionLockPath: path.join(os.tmpdir(), "background-computer-use", "pi-action.lock"),
 		actionLockTtlMs: 30_000,
+		stateTokenTtlMs: 15_000,
 	});
 }
 
@@ -157,6 +165,16 @@ test("manifest candidates preserve an explicit configured path when it duplicate
 	assert.equal(candidates.filter((item) => item === "/tmp/background-computer-use/runtime-manifest.json").length, 1);
 });
 
+test("explicit manifests outside the temp root remain beneath the filesystem-root trust anchor", async () => {
+	const root = await fs.mkdtemp(path.join(process.cwd(), ".bcu-client-root-"));
+	try {
+		const manifestPath = await writeManifest(root, "http://127.0.0.1:1234");
+		assert.equal(await resolveTrustedFilePath(path.parse(manifestPath).root, path.dirname(manifestPath), manifestPath), manifestPath);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
 test("missing manifest is classified", async () => {
 	await withTempDir(async (root) => {
 		await assert.rejects(client(path.join(root, "missing.json")).readManifest(), (error) => {
@@ -176,6 +194,146 @@ test("invalid manifest JSON is classified", async () => {
 			assert.equal(error.code, "manifest_invalid");
 			return true;
 		});
+	});
+});
+
+test("manifest reads reject symlinks and non-owner-only modes", async () => {
+	await withTempDir(async (root) => {
+		const target = await writeManifest(root, "http://127.0.0.1:1234");
+		const symlink = path.join(root, "manifest-link.json");
+		await fs.symlink(target, symlink);
+		await assert.rejects(client(symlink).readManifest(), (error) => {
+			assert.equal(error.code, "manifest_invalid");
+			return true;
+		});
+
+		await fs.chmod(target, 0o644);
+		await assert.rejects(client(target).readManifest(), (error) => {
+			assert.equal(error.code, "manifest_invalid");
+			assert.match(error.message, /owner-only/);
+			return true;
+		});
+	});
+});
+
+test("manifest reads reject parent-directory symlink traversal", async () => {
+	await withTempDir(async (root) => {
+		const expectedRoot = path.join(root, "expected");
+		const outsideRoot = path.join(root, "outside");
+		await fs.mkdir(expectedRoot);
+		await fs.mkdir(outsideRoot);
+		await writeManifest(outsideRoot, "http://127.0.0.1:1234");
+		const linkedParent = path.join(expectedRoot, "linked-parent");
+		await fs.symlink(outsideRoot, linkedParent, "dir");
+
+		await assert.rejects(client(path.join(linkedParent, "runtime-manifest.json")).readManifest(), (error) => {
+			assert.equal(error.code, "manifest_invalid");
+			assert.match(error.message, /parent|resolved|trusted/i);
+			return true;
+		});
+	});
+});
+
+test("manifest reads fail closed when startedAt is missing", async () => {
+	await withTempDir(async (root) => {
+		const manifestPath = await writeManifest(root, "http://127.0.0.1:1234", { startedAt: undefined });
+		await assert.rejects(client(manifestPath).readManifest(), (error) => {
+			assert.equal(error.code, "manifest_invalid");
+			assert.match(error.message, /startedAt/);
+			return true;
+		});
+	});
+});
+
+test("manifest reads require authenticated launch identity, credential, capabilities, and exact contract", async () => {
+	await withTempDir(async (root) => {
+		for (const [field, overrides] of [
+			["instanceID", { instanceID: undefined }],
+			["authorizationToken", { authorizationToken: undefined }],
+			["capabilities", { capabilities: undefined }],
+		]) {
+			const candidateRoot = path.join(root, field);
+			await fs.mkdir(candidateRoot);
+			const manifestPath = await writeManifest(candidateRoot, "http://127.0.0.1:1234", overrides);
+			await assert.rejects(client(manifestPath).readManifest(), (error) => {
+				assert.equal(error.code, "manifest_invalid");
+				assert.match(error.message, new RegExp(field, "i"));
+				return true;
+			});
+		}
+
+		const legacyRoot = path.join(root, "legacy");
+		await fs.mkdir(legacyRoot);
+		const legacyPath = await writeManifest(legacyRoot, "http://127.0.0.1:1234", { contractVersion: "legacy-contract" });
+		await assert.rejects(client(legacyPath).readManifest(), (error) => {
+			assert.equal(error.code, "unsupported_contract");
+			return true;
+		});
+	});
+});
+
+test("every system, observation, and action request carries pinned authentication headers", async () => {
+	await withTempDir(async (root) => {
+		const seen = [];
+		await withServer(async (req, res) => {
+			const baseURL = `http://127.0.0.1:${req.socket.localPort}`;
+			seen.push({ path: req.url, authorization: req.headers.authorization, instanceID: req.headers["x-bcu-instance-id"] });
+			const url = new URL(req.url ?? "/", baseURL);
+			if (url.pathname === "/health") return json(res, 200, { ok: true, contractVersion: SUPPORTED_CONTRACT_VERSION });
+			if (url.pathname === "/v1/bootstrap") return json(res, 200, bootstrap(baseURL));
+			if (url.pathname === "/v1/routes") return json(res, 200, { contractVersion: SUPPORTED_CONTRACT_VERSION, routes: routeSummaries() });
+			return json(res, 200, { ok: true });
+		}, async (baseURL) => {
+			const manifestPath = await writeManifest(root, baseURL);
+			const instance = client(manifestPath);
+			await instance.getHealth();
+			await instance.getBootstrap();
+			await instance.getRoutes();
+			await instance.postRoute("/v1/list_apps", {});
+			await instance.postRoute("/v1/click", { window: "win", stateToken: "state", x: 1, y: 2 });
+		});
+
+		assert.equal(seen.length, 5);
+		for (const request of seen) {
+			assert.equal(request.authorization, "Bearer test-authorization-token");
+			assert.equal(request.instanceID, "test-instance");
+		}
+	});
+});
+
+test("the manifest credential is redacted from successful responses and errors", async () => {
+	await withTempDir(async (root) => {
+		await withServer((req, res) => {
+			const baseURL = `http://127.0.0.1:${req.socket.localPort}`;
+			const url = new URL(req.url ?? "/", baseURL);
+			if (url.pathname === "/v1/list_apps") {
+				return json(res, 200, { note: "echo test-authorization-token here", runningApps: [] });
+			}
+			return json(res, 403, { message: "rejected test-authorization-token", authorizationToken: "test-authorization-token" });
+		}, async (baseURL) => {
+			const manifestPath = await writeManifest(root, baseURL);
+			const instance = client(manifestPath);
+			const response = await instance.postRoute("/v1/list_apps", {});
+			assert.doesNotMatch(JSON.stringify(response), /test-authorization-token/);
+			await assert.rejects(instance.postRoute("/v1/click", {}), (error) => {
+				assert.doesNotMatch(`${error.message} ${JSON.stringify(error.details)}`, /test-authorization-token/);
+				return true;
+			});
+		});
+	});
+});
+
+test("a client pins one manifest endpoint for its lifetime", async () => {
+	await withTempDir(async (root) => {
+		const manifestPath = await writeManifest(root, "http://127.0.0.1:1234");
+		const instance = client(manifestPath);
+		assert.equal((await instance.readManifest()).baseURL, "http://127.0.0.1:1234");
+		await fs.writeFile(
+			manifestPath,
+			JSON.stringify({ ...bootstrap("http://127.0.0.1:5678"), routes: routeSummaries() }),
+			{ mode: 0o600 },
+		);
+		assert.equal((await instance.readManifest()).baseURL, "http://127.0.0.1:1234");
 	});
 });
 
@@ -331,6 +489,37 @@ test("non-JSON route responses are classified", async () => {
 	});
 });
 
+test("malformed responses never expose raw bytes or the exact bearer in thrown or formatted errors", async () => {
+	await withTempDir(async (root) => {
+		await withServer((_req, res) => text(res, 200, "malformed test-authorization-token response"), async (baseURL) => {
+			const manifestPath = await writeManifest(root, baseURL);
+			await assert.rejects(client(manifestPath).getRoutes(), (error) => {
+				const formatted = errorResult(error, "Route failed");
+				const visible = `${error.message} ${JSON.stringify(error.details)} ${JSON.stringify(formatted)}`;
+				assert.doesNotMatch(visible, /test-authorization-token|malformed/);
+				assert.equal(error.code, "non_json_response");
+				return true;
+			});
+		});
+	});
+});
+
+test("HTTP response bodies are capped while streaming before text or JSON materialization", async () => {
+	await withTempDir(async (root) => {
+		await withServer((_req, res) => {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(Buffer.alloc(MAX_RESPONSE_BODY_BYTES + 1, 0x61));
+		}, async (baseURL) => {
+			const manifestPath = await writeManifest(root, baseURL);
+			await assert.rejects(client(manifestPath).getHealth(), (error) => {
+				assert.equal(error.code, "response_too_large");
+				assert.doesNotMatch(error.message, /a{20}/);
+				return true;
+			});
+		});
+	});
+});
+
 test("non-2xx JSON errors preserve HTTP classification", async () => {
 	await withTempDir(async (root) => {
 		await withServer((req, res) => {
@@ -439,6 +628,44 @@ test("unsupported contracts fail the ready gate", async () => {
 				assert.equal(error.code, "unsupported_contract");
 				return true;
 			});
+		});
+	});
+});
+
+test("ready gate rejects every inconsistent contract and pinned bootstrap identity combination", async () => {
+	await withTempDir(async (root) => {
+		let scenario = {};
+		await withServer((req, res) => {
+			const baseURL = `http://127.0.0.1:${req.socket.localPort}`;
+			const url = new URL(req.url ?? "/", baseURL);
+			if (url.pathname === "/health") return json(res, 200, { ok: true, contractVersion: scenario.healthVersion ?? SUPPORTED_CONTRACT_VERSION });
+			if (url.pathname === "/v1/bootstrap") return json(res, 200, bootstrap(baseURL, {
+				contractVersion: scenario.bootstrapVersion ?? SUPPORTED_CONTRACT_VERSION,
+				baseURL: scenario.bootstrapBaseURL ?? baseURL,
+				startedAt: scenario.bootstrapStartedAt ?? "2026-04-25T01:00:00Z",
+				instanceID: scenario.bootstrapInstanceID ?? "test-instance",
+			}));
+			if (url.pathname === "/v1/routes") return json(res, 200, { contractVersion: scenario.routesVersion ?? SUPPORTED_CONTRACT_VERSION, routes: routeSummaries() });
+			return json(res, 404, { ok: false });
+		}, async (baseURL) => {
+			const cases = [
+				["health", { healthVersion: "wrong" }, "unsupported_contract"],
+				["bootstrap", { bootstrapVersion: "wrong" }, "unsupported_contract"],
+				["routes", { routesVersion: "wrong" }, "unsupported_contract"],
+				["baseURL", { bootstrapBaseURL: "http://127.0.0.1:1" }, "manifest_invalid"],
+				["startedAt", { bootstrapStartedAt: "2026-04-25T01:01:00Z" }, "manifest_invalid"],
+				["instanceID", { bootstrapInstanceID: "wrong-instance" }, "manifest_invalid"],
+			];
+			for (const [name, values, code] of cases) {
+				scenario = values;
+				const caseRoot = path.join(root, name);
+				await fs.mkdir(caseRoot);
+				const manifestPath = await writeManifest(caseRoot, baseURL);
+				await assert.rejects(client(manifestPath).assertPhase1Ready(), (error) => {
+					assert.equal(error.code, code);
+					return true;
+				});
+			}
 		});
 	});
 });

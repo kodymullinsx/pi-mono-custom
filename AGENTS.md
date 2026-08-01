@@ -6,14 +6,12 @@
 - This is the live Pi Harness source fork and runtime-adjacent source workspace. Do not archive, relocate, or treat it as disposable without an explicit runtime migration.
 - Source-level memory lives at `/Users/kodymullins/Workspace/Memory/tooling/pi-mono-custom/memory.md`; live install/config/runtime memory lives at `/Users/kodymullins/Workspace/Memory/tooling/pi-harness/memory.md`.
 - Distinguish the source checkout, global installed Pi binary, `.pi/extensions`, runtime config, sessions, model routing, and active processes. Prove the layer the user asked about.
-- Current package directories in this checkout are `packages/ai`, `packages/agent`, `packages/coding-agent`, `packages/tui`, `packages/mom`, and `packages/web-ui`.
+- Current package directories in this checkout are `packages/ai`, `packages/agent`, `packages/coding-agent`, `packages/tui`, `packages/mom`, `packages/web-ui`, `packages/server`, and `packages/storage`.
 
 ## Conversational Style
 
-- Keep answers short and concise
-- No emojis in commits, issues, PR comments, or code
-- No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
-- Technical prose only, be direct
+- Keep answers short, concise, direct, and technical. No fluff or cheerful filler (e.g., "Thanks @user" not "Thanks so much @user!").
+- No emojis in commits, issues, PR comments, or code.
 - When the user asks a question, answer it first before making edits or running implementation commands.
 - When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
 
@@ -35,7 +33,7 @@
 
 - After code changes (not docs): `npm run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
 - Never run `npm run build` or `npm test` unless requested by the user.
-- Never run the full vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. Otherwise run specific tests from the package root: `node ../../node_modules/vitest/dist/cli.js --run test/specific.test.ts`.
+- Never run the full vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. Otherwise run specific tests from the package root: `node node_modules/vitest/vitest.mjs --run test/specific.test.ts`.
 - If you create or modify a test file, run it and iterate on test or implementation until it passes.
 - For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
 - Put issue-specific regressions under `packages/coding-agent/test/suite/regressions/` named `<issue-number>-<short-slug>.test.ts`.
@@ -52,49 +50,26 @@
 
 ## Git
 
-Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:
-
-Committing:
+Multiple Pi sessions may modify different files in this cwd concurrently. Never touch unstaged, staged, or untracked files outside your own changes.
 
 - Only commit files YOU changed in THIS session.
 - Stage explicit paths (`git add <path1> <path2>`); never `git add -A` / `git add .`.
-- Before committing, run `git status` and verify you are only staging your files.
+- Before committing, run `git status` and verify that only your files are staged.
 - `packages/ai/src/models.generated.ts` may always be included alongside your files.
 - Message format: `{feat,fix,docs}[(ai,tui,agent,coding-agent)]: <commit message> (optionally multiple lines)`. Message is informative and concise.
 
-Never run (destroys other agents' work or bypasses checks):
-
-- `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, `git add .`, `git commit --no-verify`.
-
-If rebase conflicts occur:
-
-- Resolve conflicts only in files you modified.
-- If a conflict is in a file you did not modify, abort and ask the user.
+- Never run commands that destroy other sessions' work or bypass checks: `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, `git add -A`, `git add .`, or `git commit --no-verify`.
+- If a rebase conflict is in a file you modified, resolve it; if it is in any other file, abort and ask the user.
 - Never force push.
 
-## Issues and PRs
+## Issues and Pull Requests
 
 See `CONTRIBUTING.md` for the contributor gate (auto-close workflows, `lgtm`/`lgtmi`, quality bar).
 
-When reviewing PRs:
-
-- Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
-- Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
-- If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
-
-When creating issues:
-
-- Add `pkg:*` labels for affected packages (`pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:tui`); use all that apply.
-
-When posting issue/PR comments:
-
-- Write the comment to a temp file and post with `gh issue/pr comment --body-file` (never multi-line markdown via `--body`).
-- Keep comments concise, technical, in the user's tone.
-- End every AI-posted comment with the AI-generated disclaimer line specified by the originating prompt (e.g. `This comment is AI-generated by `/wr``).
-
-When closing issues via commit:
-
-- Include `fixes #<number>` or `closes #<number>` in the message so merging auto-closes the issue. For multiple issues, repeat the keyword per issue (`closes #1, closes #2`); a shared keyword (`closes #1, #2`) only closes the first.
+- Review PRs without moving the worktree: use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs. Do not run `gh pr checkout`, `git switch`, or otherwise move to the PR branch unless the user explicitly asks. Read PR file contents from temporary files or with `git show <ref>:<path>`.
+- When creating issues, add every applicable package label: `pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:tui`.
+- Write issue/PR comments to a temp file and post with `gh issue/pr comment --body-file`; never pass multiline Markdown through `--body`. Keep comments concise, technical, in the user's tone, and end every AI-posted comment with the disclaimer line specified by the originating prompt (e.g. `This comment is AI-generated by `/wr``).
+- To close issues through a commit, include `fixes #<number>` or `closes #<number>`. Repeat the keyword for multiple issues (`closes #1, closes #2`); `closes #1, #2` closes only the first.
 
 ## Testing pi Interactive Mode with tmux
 
@@ -109,23 +84,14 @@ tmux send-keys -t pi-test Escape               # special keys (also C-o for ctrl
 tmux kill-session -t pi-test
 ```
 
-## Changelog
+## Changelogs and Releases
 
-Location: `packages/*/CHANGELOG.md` (one per package).
-
-Sections under `## [Unreleased]`: `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, `### Removed`.
-
-Rules:
+Each package has `packages/*/CHANGELOG.md`. Under `## [Unreleased]`, use `### Breaking Changes` (API changes requiring migration), `### Added`, `### Changed`, `### Fixed`, or `### Removed`.
 
 - All new entries go under `## [Unreleased]`. Read the full section first and append to existing subsections; never duplicate them.
 - Released version sections (e.g. `## [0.12.2]`) are immutable; never modify them.
-
-Attribution:
-
-- Internal (from issues): `Fixed foo bar ([#123](https://github.com/earendil-works/pi-mono/issues/123))`
-- External contributions: `Added feature X ([#456](https://github.com/earendil-works/pi-mono/pull/456) by [@username](https://github.com/username))`
-
-## Releasing
+- Internal attribution: `Fixed foo bar ([#123](https://github.com/earendil-works/pi-mono/issues/123))`.
+- External attribution: `Added feature X ([#456](https://github.com/earendil-works/pi-mono/pull/456) by [@username](https://github.com/username))`.
 
 **Lockstep versioning**: all packages share one version; every release updates all together. `patch` = fixes + additions, `minor` = breaking changes. No major releases.
 

@@ -1,12 +1,20 @@
 {
-  "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "noEmit": true
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "types": ["node"],
+    "paths": {
+      "@earendil-works/pi-agent-core": ["../../../../Workspace/tooling/pi-mono-custom/node_modules/@earendil-works/pi-agent-core/dist/index.d.ts"],
+      "@earendil-works/pi-coding-agent": ["../../../../Workspace/tooling/pi-mono-custom/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"],
+      "@earendil-works/pi-ai": ["../../../../Workspace/tooling/pi-mono-custom/node_modules/@earendil-works/pi-ai/dist/index.d.ts"],
+      "typebox": ["../../../../Workspace/tooling/pi-mono-custom/node_modules/typebox/build/index.d.mts"]
+    }
   },
-  "include": [
-    "*.ts"
-  ]
+  "include": ["*.ts"]
 }
